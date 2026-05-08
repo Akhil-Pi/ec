@@ -168,19 +168,32 @@ class InterventionPolicy:
         return result
 
     def _compute_interventions(self, pss_components):
-        """Decide which corrections to apply based on which sub-score dominates."""
+        """
+        Decide which corrections to apply based on which sub-score dominates.
+
+        Tilt direction depends on cervical displacement sign:
+        - Positive cervical_cm (head forward-right) → tilt left (negative rx)
+        - Negative cervical_cm (head forward-left) → tilt right (positive rx)
+        """
         actions = []
 
         # Defensive: check for required sub-score fields
         trunk = pss_components.get("trunk_score", 0.0)
         cervical = pss_components.get("cervical_score", 0.0)
+        cervical_cm = pss_components.get("cervical_cm", 0.0)
 
         if trunk > 0.4:
             magnitude = config.Z_ADJUST_STEP * trunk
             actions.append(("raise", magnitude))
+
         if cervical > 0.4:
             magnitude = config.TILT_ADJUST_STEP * cervical
+            # Apply tilt in opposite direction of head displacement
+            # If head tilted right (positive cervical_cm), tilt left (negative)
+            if cervical_cm < 0:
+                magnitude = -magnitude
             actions.append(("tilt", magnitude))
+
         if not actions:
             # Generic fallback if PSS is high but neither sub-score dominates
             actions.append(("raise", config.Z_ADJUST_STEP * 0.5))

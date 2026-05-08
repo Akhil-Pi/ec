@@ -80,8 +80,9 @@ class PSSCalculator:
         Forward head displacement = horizontal distance between ear-midpoint
         and shoulder-midpoint, scaled by user's shoulder width (assumed 38 cm).
 
-        Map: 0 cm -> 0, 5 cm -> 1.0 (proposal IV.B).
-        Returns (displacement_cm, score_in_[0,1]).
+        SIGNED version: positive = head forward to right, negative = head forward to left
+        Map: 0 cm -> 0, ±5 cm -> ±1.0 (proposal IV.B).
+        Returns (displacement_cm_signed, score_in_[0,1]).
         """
         if landmarks is None:
             return 0.0, 0.0
@@ -97,17 +98,18 @@ class PSSCalculator:
         if shoulder_width < 1e-6:
             return 0.0, 0.0
 
-        x_offset = abs(ear_mid[0] - shoulder_mid[0])
+        # Preserve direction: positive if head forward-right, negative if forward-left
+        x_offset_signed = ear_mid[0] - shoulder_mid[0]
         ASSUMED_SHOULDER_WIDTH_CM = 38.0
-        displacement_cm = ((x_offset / shoulder_width)
+        displacement_cm = ((x_offset_signed / shoulder_width)
                            * ASSUMED_SHOULDER_WIDTH_CM)
 
         # Subtract individual neutral baseline if calibrated
         if self._neutral_cervical_offset is not None:
-            displacement_cm = max(0.0, displacement_cm
-                                  - self._neutral_cervical_offset)
+            displacement_cm = displacement_cm - self._neutral_cervical_offset
 
-        score = displacement_cm / config.CERVICAL_MAX_CM
+        # Score uses absolute value (magnitude), but displacement keeps sign
+        score = abs(displacement_cm) / config.CERVICAL_MAX_CM
         return displacement_cm, float(np.clip(score, 0.0, 1.0))
 
     # ---------- COMPOSITE PSS ----------
