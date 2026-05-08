@@ -39,6 +39,7 @@ class PSSCalculator:
         self.window = smoothing_window or config.PSS_SMOOTHING_WINDOW
         self.buffer = deque(maxlen=self.window)
         self._neutral_cervical_offset = None
+        self._neutral_lean_ratio = None
 
     # ---------- SUB-SCORES ----------
 
@@ -114,22 +115,77 @@ class PSSCalculator:
 
     # ---------- COMPOSITE PSS ----------
 
-    def compute(self, landmarks):
-        """Compute PSS and components for a single frame."""
-        trunk_angle, trunk_score = self.trunk_inclination_score(landmarks)
-        cervical_cm, cervical_score = self.cervical_displacement_score(landmarks)
+    def forward_lean_score(self, landmarks):
+        """
+        Proxy for forward lean using front-facing camera.
+    
+        When standing upright: shoulder-to-hip vertical distance is large.
+        When leaning forward: torso foreshortens, distance shrinks.
+    
+        Also uses nose-to-shoulder vertical drop as secondary signal.
+        Returns (lean_ratio, score_in_[0,1]).
+        """
+        if landmarks is None:
+            return 0.0, 0.0
 
-        pss_raw = (trunk_score + cervical_score) / 2.0
+        ls = landmarks["LEFT_SHOULDER"][:2]
+        rs = landmarks["RIGHT_SHOULDER"][:2]
+        lh = landmarks["LEFT_HIP"][:2]
+        rh = landmarks["RIGHT_HIP"][:2]
+        nose = landmarks["NOSE"][:2]
+
+        shoulder_mid = midpoint(ls, rs)
+        hip_mid      = midpoint(lh, rh)
+
+    # Vertical distance shoulder to hip (normalized image coords)
+        torso_height = abs(hip_mid[1] - shoulder_mid[1])
+
+    # Nose to shoulder vertical drop
+        nose_to_shoulder = abs(shoulder_mid[1] - nose[1])
+
+    # Ratio: nose_to_shoulder / torso_height
+    # Upright: ~0.25-0.30 (head well above shoulders)
+    # Forward lean: ratio drops as shoulders rise toward nose
+        if torso_height < 1e-6:
+            return 0.0, 0.0
+
+        ratio = nose_to_shoulder / torso_height
+
+    # Store neutral ratio during calibration
+        if self._neutral_lean_ratio is None:
+            return ratio, 0.0
+
+    # How much has ratio dropped from neutral?
+        lean_delta = self._neutral_lean_ratio - ratio
+
+    # Map: 0 drop = 0 score, 0.15 drop = 1.0 score
+        score = lean_delta / 0.15
+        return lean_delta, float(np.clip(score, 0.0, 1.0))
+
+
+    def compute(self, landmarks):
+        trunk_angle,  trunk_score    = self.trunk_inclination_score(landmarks)
+        cervical_cm,  cervical_score = self.cervical_displacement_score(landmarks)
+        lean_delta,   lean_score     = self.forward_lean_score(landmarks)
+
+    # PSS = weighted mean of all three
+    # Forward lean gets highest weight since that's what we want the cobot to respond to
+        pss_raw = (trunk_score * 0.30 +
+                   cervical_score * 0.30 +
+                   lean_score * 0.40)
+
         self.buffer.append(pss_raw)
         pss_smooth = float(np.mean(self.buffer))
 
         return {
-            "trunk_angle": trunk_angle,
-            "trunk_score": trunk_score,
-            "cervical_cm": cervical_cm,
+            "trunk_angle":    trunk_angle,
+            "trunk_score":    trunk_score,
+            "cervical_cm":    cervical_cm,
             "cervical_score": cervical_score,
-            "pss_raw": pss_raw,
-            "pss_smooth": pss_smooth,
+            "lean_delta":     lean_delta,
+            "lean_score":     lean_score,
+            "pss_raw":        pss_raw,
+            "pss_smooth":     pss_smooth,
         }
 
     # ---------- CALIBRATION ----------
@@ -146,6 +202,14 @@ class PSSCalculator:
         print(f"[PSS] Calibrated neutral cervical offset: "
               f"{self._neutral_cervical_offset:.2f} cm")
 
+    def calibrate_neutral_lean(self, lean_samples):
+        if not lean_samples:
+            self._neutral_lean_ratio = 0.3   # sensible default
+            return
+        self._neutral_lean_ratio = float(np.median(lean_samples))
+        print(f"[PSS] Neutral lean ratio: {self._neutral_lean_ratio:.3f}")
+
     def reset(self):
         self.buffer.clear()
         self._neutral_cervical_offset = None
+        self._neutral_lean_ratio = None

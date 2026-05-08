@@ -137,6 +137,8 @@ class InterventionPolicy:
                 ok = robot.adjust_height(magnitude)
             elif action == "tilt":
                 ok = robot.adjust_tilt(magnitude)
+            elif action == "forward":
+                ok = robot.adjust_depth(magnitude)
             else:
                 ok = False
             if not ok:
@@ -168,33 +170,28 @@ class InterventionPolicy:
         return result
 
     def _compute_interventions(self, pss_components):
-        """
-        Decide which corrections to apply based on which sub-score dominates.
-
-        Tilt direction depends on cervical displacement sign:
-        - Positive cervical_cm (head forward-right) → tilt left (negative rx)
-        - Negative cervical_cm (head forward-left) → tilt right (positive rx)
-        """
         actions = []
+        trunk       = pss_components.get("trunk_score",    0.0)
+        cervical    = pss_components.get("cervical_score", 0.0)
+        cervical_cm = pss_components.get("cervical_cm",    0.0)
+        lean        = pss_components.get("lean_score",     0.0)
 
-        # Defensive: check for required sub-score fields
-        trunk = pss_components.get("trunk_score", 0.0)
-        cervical = pss_components.get("cervical_score", 0.0)
-        cervical_cm = pss_components.get("cervical_cm", 0.0)
+    # Forward lean detected → bring artifact toward participant (Y axis)
+        if lean > 0.3:
+            actions.append(("forward", config.Y_ADJUST_STEP * lean))
 
+    # Trunk inclined → raise artifact
         if trunk > 0.4:
-            magnitude = config.Z_ADJUST_STEP * trunk
-            actions.append(("raise", magnitude))
+            actions.append(("raise", config.Z_ADJUST_STEP * trunk))
 
+    # Cervical displacement → tilt artifact
         if cervical > 0.4:
             magnitude = config.TILT_ADJUST_STEP * cervical
-            # Apply tilt in opposite direction of head displacement
-            # If head tilted right (positive cervical_cm), tilt left (negative)
             if cervical_cm < 0:
                 magnitude = -magnitude
             actions.append(("tilt", magnitude))
 
         if not actions:
-            # Generic fallback if PSS is high but neither sub-score dominates
             actions.append(("raise", config.Z_ADJUST_STEP * 0.5))
+
         return actions
