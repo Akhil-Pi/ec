@@ -101,6 +101,25 @@ class UR3Controller:
             return
         self.rtde_c.stopL(deceleration)
 
+    def wait_for_motion_complete(self, timeout_s=5.0):
+        """
+        Block until the robot stops moving (velocity near zero).
+        Returns (success, time_waited_s).
+        """
+        if self.simulate:
+            return True, 0.0
+        start = time.time()
+        while (time.time() - start) < timeout_s:
+            q_dot = self.rtde_r.getActualQd()
+            velocity = sum(v**2 for v in q_dot) ** 0.5
+            if velocity < 0.01:
+                waited = time.time() - start
+                logger.info(f"[UR3] Motion complete (waited {waited:.2f}s)")
+                return True, waited
+            time.sleep(0.05)
+        logger.warning(f"[UR3] Timeout waiting for motion ({timeout_s}s)")
+        return False, timeout_s
+
     # ---------- POSTURAL FINE ADJUSTMENTS ----------
 
     def adjust_lateral(self, dx):

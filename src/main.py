@@ -131,7 +131,7 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
 
     detector  = PoseDetector()
     pss_calc  = PSSCalculator()
-    policy    = InterventionPolicy()
+    policy    = InterventionPolicy(condition=condition)
     logger_obj = SessionLogger(participant_id, condition)
     robot     = UR3Controller(simulate=simulate)
     if not simulate:
@@ -204,21 +204,23 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
             latest_pss.update(pss_components)   # share with transition thread
             logger_obj.log_frame(pss_components)
 
-            action_info = {"triggered": False, "reason": "control_mode"}
-            if condition == "experimental":
-                # Only allow fine adjustments AFTER transition is done
-                if not transition_thread.is_alive():
-                    action_info = policy.evaluate(pss_components, robot)
-                    if action_info["triggered"]:
-                        logger_obj.log_event(
-                            "intervention",
-                            pss_components["pss_smooth"],
-                            actions=action_info["interventions"],
-                            latency_s=action_info.get("latency_s"),
-                            details=f"id={action_info.get('intervention_id')}"
-                        )
-                else:
-                    action_info["reason"] = "transitioning"
+            action_info = {"triggered": False, "reason": ""}
+
+            # For experimental: wait for robot to finish gradual transition
+            # before enabling fine adjustments. For control: policy already
+            # returns "control_group" reason.
+            if condition == "experimental" and transition_thread.is_alive():
+                action_info["reason"] = "transitioning"
+            else:
+                action_info = policy.evaluate(pss_components, robot)
+                if action_info["triggered"]:
+                    logger_obj.log_event(
+                        "intervention",
+                        pss_components["pss_smooth"],
+                        actions=action_info["interventions"],
+                        latency_s=action_info.get("latency_s"),
+                        details=f"id={action_info.get('intervention_id')}"
+                    )
 
             frame = render_overlay(frame, pss_components, action_info,
                                    elapsed, duration_s,
