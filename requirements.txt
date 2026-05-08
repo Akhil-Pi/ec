@@ -1,0 +1,8 @@
+ur-rtde>=1.5.0
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.11.0
+matplotlib>=3.7.0
+pingouin>=0.5.3
