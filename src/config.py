@@ -23,10 +23,10 @@ JOINT_PATH = [HOME_JOINTS, POINT_1_JOINTS, POINT_2_JOINTS,
               POINT_3_JOINTS, DESIRED_JOINTS]
 
 # Gradual transition
-TRANSITION_STEPS      = 20     # robot moves in 20 increments
-TRANSITION_STEP_DELAY = 1.5   # seconds between each step (~1 min total)
-TRANSITION_SPEED      = 0.05   # 2 cm/s for home→desired gradual move
-TRANSITION_ACCEL      = 0.04   # very gentle acceleration
+TRANSITION_STEPS      = 12     # robot moves in 12 increments (was 20)
+TRANSITION_STEP_DELAY = 0.8   # seconds between each step (~10s total, was 30s)
+TRANSITION_SPEED      = 0.08   # slightly faster: 2.4 cm/s (was 0.05)
+TRANSITION_ACCEL      = 0.06   # slightly faster acceleration (was 0.04)
 
 # Adjustment steps
 Z_ADJUST_STEP    = 0.02   # 2cm vertical
@@ -49,7 +49,7 @@ PSS_THRESHOLD        = 0.40   # cobot intervention trigger
 PSS_HYSTERESIS       = 0.10   # PSS must drop below 0.30 to "reset"
 PSS_SMOOTHING_WINDOW = 30     # frames (~1 sec at 30 FPS)
 
-CALIBRATION_DURATION_S = 15
+CALIBRATION_DURATION_S = 5    # reduced from 15s for faster setup
 
 
 # VISION CONFIGURATION
