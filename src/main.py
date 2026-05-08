@@ -155,7 +155,7 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
         print("Moving to HOME_JOINTS via safe path...")
         # If robot is near DESIRED_POSE already, traverse waypoints in reverse
         # For now assume robot starts near HOME_JOINTS
-        robot.move_linear(config.HOME_JOINTS, speed=0.05)
+        robot.go_home()
         logger_obj.log_event("robot_home", 0.0)
 
         # 2. Calibration (user stands upright, looks forward)
@@ -169,9 +169,8 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
         def do_transition():
             if condition == "experimental":
                 robot.gradual_transition(
-                    config.DESIRED_POSE,
-                    pss_callback=lambda: latest_pss
-                )
+                    pss_callback=lambda: latest_pss   # no path argument — uses JOINT_PATH
+            )
 
         transition_thread = threading.Thread(target=do_transition, daemon=True)
         transition_thread.start()

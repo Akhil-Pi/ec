@@ -24,9 +24,9 @@ JOINT_PATH = [HOME_JOINTS, POINT_1_JOINTS, POINT_2_JOINTS,
 
 # Gradual transition
 TRANSITION_STEPS      = 20     # robot moves in 20 increments
-TRANSITION_STEP_DELAY = 3.0    # seconds between each step (~1 min total)
-TRANSITION_SPEED      = 0.02   # 2 cm/s for home→desired gradual move
-TRANSITION_ACCEL      = 0.03   # very gentle acceleration
+TRANSITION_STEP_DELAY = 1.5   # seconds between each step (~1 min total)
+TRANSITION_SPEED      = 0.05   # 2 cm/s for home→desired gradual move
+TRANSITION_ACCEL      = 0.04   # very gentle acceleration
 
 # Adjustment steps
 Z_ADJUST_STEP    = 0.02   # 2cm vertical
