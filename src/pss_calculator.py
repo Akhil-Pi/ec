@@ -170,9 +170,9 @@ class PSSCalculator:
 
     # PSS = weighted mean of all three
     # Forward lean gets highest weight since that's what we want the cobot to respond to
-        pss_raw = (trunk_score * 0.30 +
-                   cervical_score * 0.30 +
-                   lean_score * 0.40)
+        pss_raw = (trunk_score * 0.25 +
+                   cervical_score * 0.25 +
+                   lean_score * 0.50)
 
         self.buffer.append(pss_raw)
         pss_smooth = float(np.mean(self.buffer))

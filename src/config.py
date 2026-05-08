@@ -9,8 +9,8 @@ SAFE_BOUNDS = {
 }
 
 # Movement parameters
-MOVE_SPEED        = 0.03  # m/s
-MOVE_ACCELERATION = 0.05  # m/s^2
+MOVE_SPEED        = 0.06  # m/s
+MOVE_ACCELERATION = 0.06  # m/s^2
 
 # Joint Config
 HOME_JOINTS    = [1.42383, -2.61049, -2.11889, 1.60235, 1.71181, 1.57638]
@@ -25,8 +25,8 @@ JOINT_PATH = [HOME_JOINTS, POINT_1_JOINTS, POINT_2_JOINTS,
 # Gradual transition
 TRANSITION_STEPS      = 12     # robot moves in 12 increments (was 20)
 TRANSITION_STEP_DELAY = 0.4   # seconds between each step (~10s total, was 30s)
-TRANSITION_SPEED      = 0.12   # slightly faster: 2.4 cm/s (was 0.05)
-TRANSITION_ACCEL      = 0.08   # slightly faster acceleration (was 0.04)
+TRANSITION_SPEED      = 0.15   # slightly faster: 2.4 cm/s (was 0.05)
+TRANSITION_ACCEL      = 0.1   # slightly faster acceleration (was 0.04)
 
 # Adjustment steps
 Z_ADJUST_STEP    = 0.02   # 2cm vertical
@@ -45,8 +45,8 @@ TRUNK_HIGH_RISK_DEG  = 60.0   # above this = high risk (RULA action 4)
 CERVICAL_NEUTRAL_CM  = 2.5    # neutral zone (Hansraj 2014)
 CERVICAL_MAX_CM      = 5.0    # maps to 1.0 score
 
-PSS_THRESHOLD        = 0.40   # cobot intervention trigger
-PSS_HYSTERESIS       = 0.10   # PSS must drop below 0.30 to "reset"
+PSS_THRESHOLD        = 0.15   # cobot intervention trigger
+PSS_HYSTERESIS       = 0.08   # PSS must drop below 0.30 to "reset"
 PSS_SMOOTHING_WINDOW = 30     # frames (~1 sec at 30 FPS)
 
 CALIBRATION_DURATION_S = 5    # reduced from 15s for faster setup

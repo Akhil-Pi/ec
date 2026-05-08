@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 class InterventionPolicy:
     def __init__(self, condition="experimental", threshold=None, hysteresis=None,
-                 sustained_seconds=2.0, cooldown_seconds=5.0):
+                 sustained_seconds=2.0, cooldown_seconds=3.0):
         assert condition in ("control", "experimental"), \
             "condition must be 'control' or 'experimental'"
         self.condition = condition
@@ -98,7 +98,7 @@ class InterventionPolicy:
                 cooldown_reason = "high_pss"
             # If PSS is moderately above threshold, use standard cooldown
             elif pss >= self.threshold:
-                dynamic_cooldown = 3.0
+                dynamic_cooldown = 2.0
                 cooldown_reason = "standard"
             # If PSS dropped below threshold, minimal cooldown (0.5s)
             else:
@@ -177,15 +177,15 @@ class InterventionPolicy:
         lean        = pss_components.get("lean_score",     0.0)
 
     # Forward lean detected → bring artifact toward participant (Y axis)
-        if lean > 0.3:
+        if lean > 0.15:
             actions.append(("forward", config.Y_ADJUST_STEP * lean))
 
     # Trunk inclined → raise artifact
-        if trunk > 0.4:
+        if trunk > 0.25:
             actions.append(("raise", config.Z_ADJUST_STEP * trunk))
 
     # Cervical displacement → tilt artifact
-        if cervical > 0.4:
+        if cervical > 0.25:
             magnitude = config.TILT_ADJUST_STEP * cervical
             if cervical_cm < 0:
                 magnitude = -magnitude
