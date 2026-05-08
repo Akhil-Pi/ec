@@ -76,36 +76,53 @@ class PSSCalculator:
         return angle_deg, float(np.clip(score, 0.0, 1.0))
 
     def cervical_displacement_score(self, landmarks):
-        """
-        Forward head displacement = horizontal distance between ear-midpoint
-        and shoulder-midpoint, scaled by user's shoulder width (assumed 38 cm).
-
-        Map: 0 cm -> 0, 5 cm -> 1.0 (proposal IV.B).
-        Returns (displacement_cm, score_in_[0,1]).
-        """
         if landmarks is None:
             return 0.0, 0.0
-        le = landmarks["LEFT_EAR"][:2]
-        re = landmarks["RIGHT_EAR"][:2]
+
+        # Pick the more visible side
+        l_ear_vis = landmarks["LEFT_EAR"][3]
+        r_ear_vis = landmarks["RIGHT_EAR"][3]
+        l_sh_vis  = landmarks["LEFT_SHOULDER"][3]
+        r_sh_vis  = landmarks["RIGHT_SHOULDER"][3]
+
+        if l_ear_vis > r_ear_vis and l_sh_vis > r_sh_vis:
+            ear      = landmarks["LEFT_EAR"][:2]
+            shoulder = landmarks["LEFT_SHOULDER"][:2]
+        elif r_ear_vis > l_ear_vis and r_sh_vis > l_sh_vis:
+            ear      = landmarks["RIGHT_EAR"][:2]
+            shoulder = landmarks["RIGHT_SHOULDER"][:2]
+        else:
+        # fallback to midpoints
+            le = landmarks["LEFT_EAR"][:2]
+            re = landmarks["RIGHT_EAR"][:2]
+            ls = landmarks["LEFT_SHOULDER"][:2]
+            rs = landmarks["RIGHT_SHOULDER"][:2]
+            ear      = midpoint(le, re)
+            shoulder = midpoint(ls, rs)
+
+        # From side-on view, forward head = ear is AHEAD of shoulder in x
+        # shoulder width trick doesn't work side-on, use image width fraction instead
+        x_offset = abs(ear[0] - shoulder[0])
+
+        # From side, a 5cm forward head displacement ≈ 8% of frame width at 1.5m
+        # Calibration handles the rest — this maps raw offset to approximate cm
+        ASSUMED_SHOULDER_WIDTH_CM = 38.0
         ls = landmarks["LEFT_SHOULDER"][:2]
         rs = landmarks["RIGHT_SHOULDER"][:2]
-
-        ear_mid = midpoint(le, re)
-        shoulder_mid = midpoint(ls, rs)
-
         shoulder_width = abs(ls[0] - rs[0])
-        if shoulder_width < 1e-6:
-            return 0.0, 0.0
 
-        x_offset = abs(ear_mid[0] - shoulder_mid[0])
-        ASSUMED_SHOULDER_WIDTH_CM = 38.0
-        displacement_cm = ((x_offset / shoulder_width)
-                           * ASSUMED_SHOULDER_WIDTH_CM)
+        # Side-on: shoulder width appears very small (near zero)
+        # Use a fixed fraction of frame width instead
+        if shoulder_width < 0.05:
+            # Side-on camera — shoulder width not reliable
+            # Use 15% of frame width as proxy for 5cm
+            displacement_cm = (x_offset / 0.15) * 5.0
+        else:
+            # Angled camera — shoulder width visible
+            displacement_cm = (x_offset / shoulder_width) * ASSUMED_SHOULDER_WIDTH_CM
 
-        # Subtract individual neutral baseline if calibrated
         if self._neutral_cervical_offset is not None:
-            displacement_cm = max(0.0, displacement_cm
-                                  - self._neutral_cervical_offset)
+            displacement_cm = max(0.0, displacement_cm - self._neutral_cervical_offset)
 
         score = displacement_cm / config.CERVICAL_MAX_CM
         return displacement_cm, float(np.clip(score, 0.0, 1.0))
