@@ -54,7 +54,8 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
         if cv2.waitKey(1) & 0xFF == ord(" "):
             break
 
-    samples = []
+    cervical_samples = []
+    lean_samples = []
     start = time.time()
     while (time.time() - start) < duration_s:
         ret, frame = cap.read()
@@ -62,8 +63,24 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
             continue
         frame, landmarks = detector.detect(frame)
         if landmarks:
+            # Collect cervical offset samples
             cm, _ = pss_calc.cervical_displacement_score(landmarks)
-            samples.append(cm)
+            cervical_samples.append(cm)
+
+            # Collect arm spread samples for lean calibration
+            # Temporarily extract arm spread (will be used in forward_lean_score)
+            ls = landmarks.get("LEFT_SHOULDER")
+            rs = landmarks.get("RIGHT_SHOULDER")
+            le = landmarks.get("LEFT_ELBOW")
+            re = landmarks.get("RIGHT_ELBOW")
+
+            if all([ls, rs, le, re]) and all(lm[3] > 0.6 for lm in [ls, rs, le, re]):
+                ls_xy, rs_xy = ls[:2], rs[:2]
+                le_xy, re_xy = le[:2], re[:2]
+                left_arm_spread = abs(le_xy[0] - ls_xy[0])
+                right_arm_spread = abs(re_xy[0] - rs_xy[0])
+                current_spread = (left_arm_spread + right_arm_spread) / 2.0
+                lean_samples.append(current_spread)
 
         remaining = duration_s - (time.time() - start)
         cv2.putText(frame, f"Calibrating... {remaining:.0f}s",
@@ -72,12 +89,13 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
         cv2.imshow("Empathetic Conservator", frame)
         cv2.waitKey(1)
 
-    pss_calc.calibrate_neutral(samples)
+    pss_calc.calibrate_neutral(cervical_samples)
+    pss_calc.calibrate_neutral_lean(lean_samples)
     logger_obj.log_event(
         "calibration_done", 0.0,
         details=(f"neutral_offset_cm="
                  f"{pss_calc._neutral_cervical_offset:.2f},"
-                 f"samples={len(samples)}")
+                 f"samples={len(cervical_samples)}")
     )
     print("=== CALIBRATION COMPLETE ===\n")
 

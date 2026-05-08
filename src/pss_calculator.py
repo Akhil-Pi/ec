@@ -47,6 +47,7 @@ class PSSCalculator:
         """
         Trunk angle from vertical (hip-midpoint -> shoulder-midpoint vector).
         Linear scaling: 20 deg -> 0.2, 60 deg -> 1.0 (matches proposal IV.B).
+        Includes low-angle camera compensation (仰视补偿).
         Returns (angle_deg, score_in_[0,1]).
         """
         if landmarks is None:
@@ -64,6 +65,12 @@ class PSSCalculator:
                      shoulder_mid[1] - hip_mid[1])
         vertical = (0.0, -1.0)
         angle_deg = angle_between(trunk_vec, vertical)
+
+        # Low-angle camera compensation: 仰视会使倾斜角看起来更小
+        # 当摄像头在参与者下方时，添加+15度的校正因子
+        # 可根据实际拍摄角度调整（15-25度范围）
+        CAMERA_ELEVATION_CORRECTION = 15.0
+        angle_deg = angle_deg + CAMERA_ELEVATION_CORRECTION
 
         low = config.TRUNK_LOW_RISK_DEG
         high = config.TRUNK_HIGH_RISK_DEG
@@ -87,10 +94,24 @@ class PSSCalculator:
         """
         if landmarks is None:
             return 0.0, 0.0
-        le = landmarks["LEFT_EAR"][:2]
-        re = landmarks["RIGHT_EAR"][:2]
-        ls = landmarks["LEFT_SHOULDER"][:2]
-        rs = landmarks["RIGHT_SHOULDER"][:2]
+
+        # Extract landmarks with visibility check (0-1 where 1 is confident)
+        le = landmarks["LEFT_EAR"]
+        re = landmarks["RIGHT_EAR"]
+        ls = landmarks["LEFT_SHOULDER"]
+        rs = landmarks["RIGHT_SHOULDER"]
+
+        # Only use if visibility > 0.7 (confident detection)
+        # Visibility is at index 2 for each landmark (x, y, z, visibility)
+        MIN_VISIBILITY = 0.7
+        if (le[3] < MIN_VISIBILITY or re[3] < MIN_VISIBILITY or
+            ls[3] < MIN_VISIBILITY or rs[3] < MIN_VISIBILITY):
+            return 0.0, 0.0
+
+        le = le[:2]
+        re = re[:2]
+        ls = ls[:2]
+        rs = rs[:2]
 
         ear_mid = midpoint(le, re)
         shoulder_mid = midpoint(ls, rs)
@@ -118,48 +139,51 @@ class PSSCalculator:
     def forward_lean_score(self, landmarks):
         """
         Proxy for forward lean using front-facing camera.
-    
-        When standing upright: shoulder-to-hip vertical distance is large.
-        When leaning forward: torso foreshortens, distance shrinks.
-    
-        Also uses nose-to-shoulder vertical drop as secondary signal.
-        Returns (lean_ratio, score_in_[0,1]).
+
+        For LOW-ANGLE cameras (仰视): Uses elbow/wrist extension instead of foreshortening.
+        When upright: arms hang down naturally
+        When leaning forward: arms come forward (Y-axis compression in image coords)
+
+        Returns (lean_delta, score_in_[0,1]).
         """
         if landmarks is None:
             return 0.0, 0.0
 
-        ls = landmarks["LEFT_SHOULDER"][:2]
-        rs = landmarks["RIGHT_SHOULDER"][:2]
-        lh = landmarks["LEFT_HIP"][:2]
-        rh = landmarks["RIGHT_HIP"][:2]
-        nose = landmarks["NOSE"][:2]
+        # Get landmarks with visibility check
+        ls = landmarks.get("LEFT_SHOULDER")
+        rs = landmarks.get("RIGHT_SHOULDER")
+        le = landmarks.get("LEFT_ELBOW")
+        re = landmarks.get("RIGHT_ELBOW")
 
-        shoulder_mid = midpoint(ls, rs)
-        hip_mid      = midpoint(lh, rh)
-
-    # Vertical distance shoulder to hip (normalized image coords)
-        torso_height = abs(hip_mid[1] - shoulder_mid[1])
-
-    # Nose to shoulder vertical drop
-        nose_to_shoulder = abs(shoulder_mid[1] - nose[1])
-
-    # Ratio: nose_to_shoulder / torso_height
-    # Upright: ~0.25-0.30 (head well above shoulders)
-    # Forward lean: ratio drops as shoulders rise toward nose
-        if torso_height < 1e-6:
+        if not all([ls, rs, le, re]):
             return 0.0, 0.0
 
-        ratio = nose_to_shoulder / torso_height
+        MIN_VISIBILITY = 0.6
+        if any(lm[3] < MIN_VISIBILITY for lm in [ls, rs, le, re]):
+            return 0.0, 0.0
 
-    # Store neutral ratio during calibration
+        # For low-angle camera: measure horizontal arm extension
+        # When leaning forward, elbows move closer to body (X compression)
+        ls_xy, rs_xy = ls[:2], rs[:2]
+        le_xy, re_xy = le[:2], re[:2]
+
+        # Left arm: shoulder-to-elbow horizontal distance
+        left_arm_spread = abs(le_xy[0] - ls_xy[0])
+        # Right arm: shoulder-to-elbow horizontal distance
+        right_arm_spread = abs(re_xy[0] - rs_xy[0])
+
+        current_spread = (left_arm_spread + right_arm_spread) / 2.0
+
+        # Store neutral spread during calibration
         if self._neutral_lean_ratio is None:
-            return ratio, 0.0
+            return 0.0, 0.0
 
-    # How much has ratio dropped from neutral?
-        lean_delta = self._neutral_lean_ratio - ratio
+        # How much has arm spread reduced from neutral?
+        lean_delta = self._neutral_lean_ratio - current_spread
+        # Positive delta = more forward lean (arms compressed inward)
 
-    # Map: 0 drop = 0 score, 0.15 drop = 1.0 score
-        score = lean_delta / 0.15
+        # Map: 0 delta = 0 score, 0.1 spread reduction = 1.0 score
+        score = lean_delta / 0.1
         return lean_delta, float(np.clip(score, 0.0, 1.0))
 
 
