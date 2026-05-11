@@ -166,15 +166,10 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
     try:
-        # 1. Move to task position
-        if condition == "experimental":
-            print("Moving to task position...")
-            robot.move_joints(config.DESIRED_JOINTS)
-            logger_obj.log_event("robot_positioned", 0.0)
-        else:
-            # Control group: ensure robot is at home
-            robot.go_home()
-            logger_obj.log_event("robot_home", 0.0)
+        # 1. Move to initial task position
+        print("Moving to task position...")
+        robot.move_joints(config.DESIRED_JOINTS)
+        logger_obj.log_event("robot_positioned", 0.0)
 
         # 2. Calibration (user stands upright, looks forward)
         print("\nTell participant: stand upright, look straight ahead.")
