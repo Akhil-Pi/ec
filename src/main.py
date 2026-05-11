@@ -54,8 +54,13 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
         if cv2.waitKey(1) & 0xFF == ord(" "):
             break
 
-    cervical_samples = []
-    lean_samples = []
+    cervical_samples       = []
+    lean_samples           = []
+    torso_samples          = []
+    nose_samples           = []
+    shoulder_y_samples     = []   # NEW
+    shoulder_width_samples = []   # NEW
+
     start = time.time()
     while (time.time() - start) < duration_s:
         ret, frame = cap.read()
@@ -63,24 +68,34 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
             continue
         frame, landmarks = detector.detect(frame)
         if landmarks:
-            # Collect cervical offset samples
+            # Cervical
             cm, _ = pss_calc.cervical_displacement_score(landmarks)
             cervical_samples.append(cm)
 
-            # Collect arm spread samples for lean calibration
-            # Temporarily extract arm spread (will be used in forward_lean_score)
-            ls = landmarks.get("LEFT_SHOULDER")
-            rs = landmarks.get("RIGHT_SHOULDER")
+            ls   = landmarks["LEFT_SHOULDER"][:2]
+            rs   = landmarks["RIGHT_SHOULDER"][:2]
+            lh   = landmarks["LEFT_HIP"][:2]
+            rh   = landmarks["RIGHT_HIP"][:2]
+            nose = landmarks["NOSE"][:2]
+
+            sh_mid  = ((ls[0]+rs[0])/2, (ls[1]+rs[1])/2)
+            hip_mid = ((lh[0]+rh[0])/2, (lh[1]+rh[1])/2)
+
+            torso_samples.append(hip_mid[1] - sh_mid[1])
+            nose_samples.append(sh_mid[1] - nose[1])
+            shoulder_y_samples.append(sh_mid[1])              # NEW
+            shoulder_width_samples.append(abs(ls[0] - rs[0])) # NEW
+
+            # Lean (arm spread)
             le = landmarks.get("LEFT_ELBOW")
             re = landmarks.get("RIGHT_ELBOW")
-
-            if all([ls, rs, le, re]) and all(lm[3] > 0.6 for lm in [ls, rs, le, re]):
-                ls_xy, rs_xy = ls[:2], rs[:2]
-                le_xy, re_xy = le[:2], re[:2]
-                left_arm_spread = abs(le_xy[0] - ls_xy[0])
-                right_arm_spread = abs(re_xy[0] - rs_xy[0])
-                current_spread = (left_arm_spread + right_arm_spread) / 2.0
-                lean_samples.append(current_spread)
+            lsv = landmarks.get("LEFT_SHOULDER")
+            rsv = landmarks.get("RIGHT_SHOULDER")
+            if all([le, re, lsv, rsv]) and all(
+                    lm[3] > 0.6 for lm in [le, re, lsv, rsv]):
+                left_spread  = abs(le[:2][0] - lsv[:2][0])
+                right_spread = abs(re[:2][0] - rsv[:2][0])
+                lean_samples.append((left_spread + right_spread) / 2.0)
 
         remaining = duration_s - (time.time() - start)
         cv2.putText(frame, f"Calibrating... {remaining:.0f}s",
@@ -91,18 +106,17 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
 
     pss_calc.calibrate_neutral(cervical_samples)
     pss_calc.calibrate_neutral_lean(lean_samples)
-    logger_obj.log_event(
-        "calibration_done", 0.0,
-        details=(f"neutral_offset_cm="
-                 f"{pss_calc._neutral_cervical_offset:.2f},"
-                 f"samples={len(cervical_samples)}")
+    pss_calc.calibrate_neutral_trunk(
+        torso_samples,
+        nose_samples,
+        shoulder_y_samples,
+        shoulder_width_samples
     )
     print("=== CALIBRATION COMPLETE ===\n")
 
 
 # HUD OVERLAY
-def render_overlay(frame, pss_components, action_info,
-                   elapsed_s, total_s, transitioning=False):
+def render_overlay(frame, pss_components, action_info, elapsed_s, total_s):
     pss   = pss_components["pss_smooth"]
     color = ((0, 255, 0) if pss < 0.4
              else (0, 165, 255) if pss < 0.7
@@ -111,26 +125,27 @@ def render_overlay(frame, pss_components, action_info,
 
     # PSS bar
     cv2.rectangle(frame, (10, 60), (210, 80), (50, 50, 50), -1)
-    cv2.rectangle(frame, (10, 60), (10 + int(200 * pss), 80), color, -1)
+    cv2.rectangle(frame, (10, 60),
+                  (10 + int(200 * pss), 80), color, -1)
     cv2.putText(frame, f"PSS: {pss:.2f}", (15, 75),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
     # Sub-scores
     cv2.putText(frame,
-                f"Trunk: {pss_components['trunk_angle']:.0f} deg  "
-                f"Cervical: {pss_components['cervical_cm']:.1f} cm",
-                (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                f"Trunk:{pss_components['trunk_angle']:.0f}deg  "
+                f"Cerv:{pss_components['cervical_cm']:.1f}cm  "
+                f"Lean:{pss_components.get('lean_score', 0):.2f}",
+                (10, 100), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (200, 200, 200), 1)
 
     # Status
-    if transitioning:
-        cv2.putText(frame, "Robot moving to task position...",
+    if action_info.get("triggered"):
+        cv2.putText(frame, "INTERVENTION",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7, (0, 200, 255), 2)
-    elif action_info.get("triggered"):
-        cv2.putText(frame, "INTERVENTION", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                    0.9, (0, 0, 255), 2)
     else:
-        cv2.putText(frame, f"Status: {action_info.get('reason', '')}",
+        cv2.putText(frame,
+                    f"Status: {action_info.get('reason', '')}",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (200, 200, 200), 2)
 
@@ -147,54 +162,30 @@ def render_overlay(frame, pss_components, action_info,
 def run_session(participant_id, condition, simulate=False, duration_min=None):
     duration_s = (duration_min or config.SESSION_DURATION_MIN) * 60
 
-    detector  = PoseDetector()
-    pss_calc  = PSSCalculator()
-    policy    = InterventionPolicy(condition=condition)
+    detector   = PoseDetector()
+    pss_calc   = PSSCalculator()
+    policy     = InterventionPolicy(condition=condition)
     logger_obj = SessionLogger(participant_id, condition)
-    robot     = UR3Controller(simulate=simulate)
-    if not simulate:
-        print("\nChecking home position...")
-        at_home = robot.ensure_at_home(auto_move=True)
-        if not at_home:
-            print("ERROR: Robot not at home. Aborting session.")
-            robot.disconnect()
-            return
-        logger_obj.log_event("home_verified", 0.0)
+    robot      = UR3Controller(simulate=simulate)
 
     cap = cv2.VideoCapture(config.CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
-    # Shared PSS state for the transition thread to read
-    latest_pss = {"pss_smooth": 1.0}
-
     try:
-        # 1. Go to home
-        print("Moving to HOME_JOINTS via safe path...")
-        # If robot is near DESIRED_POSE already, traverse waypoints in reverse
-        # For now assume robot starts near HOME_JOINTS
-        robot.go_home()
-        logger_obj.log_event("robot_home", 0.0)
+        # 1. Move to desired position
+        if not simulate:
+            ok = robot.move_to_desired()
+            if not ok:
+                print("ERROR: Could not reach DESIRED position.")
+                return
+        logger_obj.log_event("at_desired_pose", 0.0)
 
-        # 2. Calibration (user stands upright, looks forward)
+        # 2. Calibration
         print("\nTell participant: stand upright, look straight ahead.")
         calibration_phase(detector, pss_calc, cap, logger_obj)
 
-        # 3. Start gradual transition to DESIRED_POSE in a background thread
-        #    so the vision loop keeps running while the robot moves
-        import threading
-
-        def do_transition():
-            if condition == "experimental":
-                robot.gradual_transition(
-                    pss_callback=lambda: latest_pss   # no path argument — uses JOINT_PATH
-            )
-
-        transition_thread = threading.Thread(target=do_transition, daemon=True)
-        transition_thread.start()
-        logger_obj.log_event("transition_started", 0.0)
-
-        # 4. Task phase
+        # 3. Task phase
         print(f"\n=== TASK PHASE ({duration_s/60:.0f} min) ===")
         print("Press 'q' to abort. Press 'i' to mark a manual event.")
         start = time.time()
@@ -211,7 +202,7 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
             frame, landmarks = detector.detect(frame)
 
             if landmarks is None:
-                cv2.putText(frame, "No pose - adjust camera height",
+                cv2.putText(frame, "No pose - adjust camera",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                             0.8, (0, 0, 255), 2)
                 cv2.imshow("Empathetic Conservator", frame)
@@ -219,30 +210,20 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
                 continue
 
             pss_components = pss_calc.compute(landmarks)
-            latest_pss.update(pss_components)   # share with transition thread
             logger_obj.log_frame(pss_components)
 
-            action_info = {"triggered": False, "reason": ""}
+            action_info = policy.evaluate(pss_components, robot)
+            if action_info["triggered"]:
+                logger_obj.log_event(
+                    "intervention",
+                    pss_components["pss_smooth"],
+                    actions=action_info["interventions"],
+                    latency_s=action_info.get("latency_s"),
+                    details=f"id={action_info.get('intervention_id')}"
+                )
 
-            # For experimental: wait for robot to finish gradual transition
-            # before enabling fine adjustments. For control: policy already
-            # returns "control_group" reason.
-            if condition == "experimental" and transition_thread.is_alive():
-                action_info["reason"] = "transitioning"
-            else:
-                action_info = policy.evaluate(pss_components, robot)
-                if action_info["triggered"]:
-                    logger_obj.log_event(
-                        "intervention",
-                        pss_components["pss_smooth"],
-                        actions=action_info["interventions"],
-                        latency_s=action_info.get("latency_s"),
-                        details=f"id={action_info.get('intervention_id')}"
-                    )
-
-            frame = render_overlay(frame, pss_components, action_info,
-                                   elapsed, duration_s,
-                                   transitioning=transition_thread.is_alive())
+            frame = render_overlay(frame, pss_components,
+                                   action_info, elapsed, duration_s)
             cv2.imshow("Empathetic Conservator", frame)
 
             key = cv2.waitKey(1) & 0xFF
@@ -255,6 +236,7 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
                                      pss_components["pss_smooth"])
 
         print("\n=== SESSION COMPLETE ===")
+        print("Now run: python ../scripts/nasa_tlx_form.py")
 
     finally:
         cap.release()

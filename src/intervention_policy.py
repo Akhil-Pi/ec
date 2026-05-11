@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 class InterventionPolicy:
     def __init__(self, condition="experimental", threshold=None, hysteresis=None,
-                 sustained_seconds=2.0, cooldown_seconds=3.0):
+                 sustained_seconds=0.5, cooldown_seconds=3.0):
         assert condition in ("control", "experimental"), \
             "condition must be 'control' or 'experimental'"
         self.condition = condition
@@ -90,19 +90,19 @@ class InterventionPolicy:
             # Strategy: if PSS improved > 0.1, allow faster re-evaluation
             if pss_improvement > 0.10:
                 # Participant is actively correcting, use very short cooldown (1s)
-                dynamic_cooldown = 1.0
+                dynamic_cooldown = 0.5
                 cooldown_reason = "fast_recovery"
             # If PSS is much higher than threshold, need quick response (1.5s cooldown)
             elif pss >= (self.threshold + 0.20):
-                dynamic_cooldown = 1.5
+                dynamic_cooldown = 0.8
                 cooldown_reason = "high_pss"
             # If PSS is moderately above threshold, use standard cooldown
             elif pss >= self.threshold:
-                dynamic_cooldown = 2.0
+                dynamic_cooldown = 1.0
                 cooldown_reason = "standard"
             # If PSS dropped below threshold, minimal cooldown (0.5s)
             else:
-                dynamic_cooldown = 0.5
+                dynamic_cooldown = 0.3
                 cooldown_reason = "recovering"
 
             if time_since_last < dynamic_cooldown:
@@ -131,22 +131,24 @@ class InterventionPolicy:
         t_arm = self._above_threshold_since
         interventions = self._compute_interventions(pss_components)
 
-        # Execute interventions
+        # Execute the ergonomic correction as one small TCP nudge.
+        dz = drx = 0.0
         for action, magnitude in interventions:
             if action == "raise":
-                ok = robot.adjust_height(magnitude)
+                dz += magnitude
             elif action == "tilt":
-                ok = robot.adjust_tilt(magnitude)
-            elif action == "forward":
-                ok = robot.adjust_depth(magnitude)
+                drx += magnitude
             else:
-                ok = False
-            if not ok:
-                logger.warning(f"[POLICY] Intervention {action} blocked")
+                logger.warning(f"[POLICY] Unknown intervention {action}")
+
+        ok = robot.move_relative(dz=dz, drx=drx,
+                                 asynchronous=True)
+        if not ok:
+            logger.warning("[POLICY] Combined intervention blocked")
 
         # Wait for robot motion to complete before recording t_act
         # This ensures latency = t_act - t_arm accurately reflects robot response time
-        robot.wait_for_motion_complete(timeout_s=5.0)
+        time.sleep(0.05)
         t_act = time.time()
 
         self._intervention_count += 1
@@ -176,16 +178,14 @@ class InterventionPolicy:
         cervical_cm = pss_components.get("cervical_cm",    0.0)
         lean        = pss_components.get("lean_score",     0.0)
 
-    # Forward lean detected → bring artifact toward participant (Y axis)
-        if lean > 0.15:
-            actions.append(("forward", config.Y_ADJUST_STEP * lean))
+        # Forward/down strain: raise and tilt the artifact.
+        posture_drive = max(lean, trunk)
+        if posture_drive > 0.25:
+            actions.append(("raise", config.Z_ADJUST_STEP * posture_drive))
+            actions.append(("tilt", config.TILT_ADJUST_STEP * posture_drive))
 
-    # Trunk inclined → raise artifact
-        if trunk > 0.25:
-            actions.append(("raise", config.Z_ADJUST_STEP * trunk))
-
-    # Cervical displacement → tilt artifact
-        if cervical > 0.25:
+        # Cervical displacement: add directional tilt.
+        if cervical > 0.3:
             magnitude = config.TILT_ADJUST_STEP * cervical
             if cervical_cm < 0:
                 magnitude = -magnitude
@@ -193,5 +193,6 @@ class InterventionPolicy:
 
         if not actions:
             actions.append(("raise", config.Z_ADJUST_STEP * 0.5))
+            actions.append(("tilt", config.TILT_ADJUST_STEP * 0.5))
 
         return actions

@@ -38,50 +38,80 @@ class PSSCalculator:
     def __init__(self, smoothing_window=None):
         self.window = smoothing_window or config.PSS_SMOOTHING_WINDOW
         self.buffer = deque(maxlen=self.window)
-        self._neutral_cervical_offset = None
-        self._neutral_lean_ratio = None
-
+        self._neutral_cervical_offset  = None
+        self._neutral_lean_ratio       = None
+        self._neutral_torso_height     = None
+        self._neutral_nose_drop        = None   # kept for compatibility
+        self._neutral_shoulder_y       = None   # NEW: shoulder height in frame
+        self._neutral_shoulder_width   = None   # NEW: shoulder width when upright
     # ---------- SUB-SCORES ----------
 
     def trunk_inclination_score(self, landmarks):
         """
-        Trunk angle from vertical (hip-midpoint -> shoulder-midpoint vector).
-        Linear scaling: 20 deg -> 0.2, 60 deg -> 1.0 (matches proposal IV.B).
-        Includes low-angle camera compensation (仰视补偿).
-        Returns (angle_deg, score_in_[0,1]).
+        For downward-angled camera (30-45 deg above shoulder):
+        
+        When upright: shoulders appear in lower portion of frame,
+                    shoulder width appears normal.
+        When bending forward: shoulders rise in frame (move toward camera),
+                            shoulder width appears wider (foreshortening).
+        
+        Primary signal: shoulder Y position rising toward top of frame.
+        Secondary signal: shoulder width increasing (foreshortening effect).
         """
         if landmarks is None:
             return 0.0, 0.0
+
         ls = landmarks["LEFT_SHOULDER"][:2]
         rs = landmarks["RIGHT_SHOULDER"][:2]
         lh = landmarks["LEFT_HIP"][:2]
         rh = landmarks["RIGHT_HIP"][:2]
 
         shoulder_mid = midpoint(ls, rs)
-        hip_mid = midpoint(lh, rh)
+        hip_mid      = midpoint(lh, rh)
 
-        # Image y-axis points DOWN, so vertical-up is (0, -1)
+        # Signal 1: shoulder Y in frame
+        # Upright: shoulder_mid[1] is relatively low (large Y value in image coords)
+        # Bending forward: shoulders rise toward camera, Y decreases
+        shoulder_y = shoulder_mid[1]
+
+        # Signal 2: shoulder width in normalized image coords
+        # Upright: normal width
+        # Bending: shoulders foreshorten, appear wider
+        shoulder_width = abs(ls[0] - rs[0])
+
+        # Signal 3: torso compression — hip to shoulder vertical distance
+        # Still useful even from above
+        torso_height = hip_mid[1] - shoulder_mid[1]
+
+        if (self._neutral_torso_height is None
+                or self._neutral_nose_drop is None):
+            # Return raw signals for calibration collection
+            return shoulder_y, 0.0
+
+        # How much have shoulders risen (Y decreased)?
+        shoulder_rise = self._neutral_shoulder_y - shoulder_y
+        rise_score    = shoulder_rise / 0.06   # 6% frame height = significant bend
+
+        # How much has torso compressed?
+        torso_delta   = self._neutral_torso_height - torso_height
+        torso_score   = torso_delta / 0.06
+
+        # How much has shoulder width increased (foreshortening)?
+        width_delta   = shoulder_width - self._neutral_shoulder_width
+        width_score   = width_delta / 0.04
+
+        # Combined — shoulder rise is most reliable from above
+        combined = (rise_score  * 0.50 +
+                    torso_score * 0.30 +
+                    width_score * 0.20)
+
+        # Angle for logging (approximate)
         trunk_vec = (shoulder_mid[0] - hip_mid[0],
-                     shoulder_mid[1] - hip_mid[1])
-        vertical = (0.0, -1.0)
+                    shoulder_mid[1] - hip_mid[1])
+        vertical  = (0.0, -1.0)
         angle_deg = angle_between(trunk_vec, vertical)
 
-        # Low-angle camera compensation: 仰视会使倾斜角看起来更小
-        # 当摄像头在参与者下方时，添加+15度的校正因子
-        # 可根据实际拍摄角度调整（15-25度范围）
-        CAMERA_ELEVATION_CORRECTION = 15.0
-        angle_deg = angle_deg + CAMERA_ELEVATION_CORRECTION
-
-        low = config.TRUNK_LOW_RISK_DEG
-        high = config.TRUNK_HIGH_RISK_DEG
-        if angle_deg <= low:
-            score = max(0.0, 0.2 * (angle_deg / low))
-        elif angle_deg >= high:
-            score = 1.0
-        else:
-            # Linear from (20, 0.2) to (60, 1.0)
-            score = 0.2 + 0.8 * ((angle_deg - low) / (high - low))
-        return angle_deg, float(np.clip(score, 0.0, 1.0))
+        return angle_deg, float(np.clip(combined, 0.0, 1.0))
 
     def cervical_displacement_score(self, landmarks):
         """
@@ -186,7 +216,6 @@ class PSSCalculator:
         score = lean_delta / 0.1
         return lean_delta, float(np.clip(score, 0.0, 1.0))
 
-
     def compute(self, landmarks):
         trunk_angle,  trunk_score    = self.trunk_inclination_score(landmarks)
         cervical_cm,  cervical_score = self.cervical_displacement_score(landmarks)
@@ -194,9 +223,9 @@ class PSSCalculator:
 
     # PSS = weighted mean of all three
     # Forward lean gets highest weight since that's what we want the cobot to respond to
-        pss_raw = (trunk_score * 0.25 +
-                   cervical_score * 0.25 +
-                   lean_score * 0.50)
+        pss_raw = (trunk_score * 0.30 +
+                   cervical_score * 0.30 +
+                   lean_score * 0.40)
 
         self.buffer.append(pss_raw)
         pss_smooth = float(np.mean(self.buffer))
@@ -226,6 +255,29 @@ class PSSCalculator:
         print(f"[PSS] Calibrated neutral cervical offset: "
               f"{self._neutral_cervical_offset:.2f} cm")
 
+    def calibrate_neutral_trunk(self, torso_samples, nose_samples,
+                                shoulder_y_samples=None,
+                                shoulder_width_samples=None):
+        if not torso_samples:
+            self._neutral_torso_height   = 0.3
+            self._neutral_nose_drop      = 0.15
+            self._neutral_shoulder_y     = 0.4
+            self._neutral_shoulder_width = 0.3
+            return
+
+        self._neutral_torso_height   = float(np.median(torso_samples))
+        self._neutral_nose_drop      = float(np.median(nose_samples)) \
+                                    if nose_samples else 0.15
+        self._neutral_shoulder_y     = float(np.median(shoulder_y_samples)) \
+                                    if shoulder_y_samples else 0.4
+        self._neutral_shoulder_width = float(np.median(shoulder_width_samples)) \
+                                    if shoulder_width_samples else 0.3
+
+        print(f"[PSS] Neutral torso height:    {self._neutral_torso_height:.3f}")
+        print(f"[PSS] Neutral shoulder Y:      {self._neutral_shoulder_y:.3f}")
+        print(f"[PSS] Neutral shoulder width:  {self._neutral_shoulder_width:.3f}")
+    
+    
     def calibrate_neutral_lean(self, lean_samples):
         if not lean_samples:
             self._neutral_lean_ratio = 0.3   # sensible default
@@ -235,5 +287,9 @@ class PSSCalculator:
 
     def reset(self):
         self.buffer.clear()
-        self._neutral_cervical_offset = None
-        self._neutral_lean_ratio = None
+        self._neutral_cervical_offset  = None
+        self._neutral_lean_ratio       = None
+        self._neutral_torso_height     = None
+        self._neutral_nose_drop        = None
+        self._neutral_shoulder_y       = None
+        self._neutral_shoulder_width   = None
