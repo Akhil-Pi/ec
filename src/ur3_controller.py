@@ -146,11 +146,16 @@ class UR3Controller:
         """
         Rotate wrist around Z-axis (tool frame).
         Positive drz = counterclockwise, negative = clockwise (when viewed from above).
-        Maps to the 6th TCP component (tool rotation around z).
+        Uses joint space rotation via moveJ to avoid linear motion artifacts.
         """
         drz = max(min(drz, config.ROTATE_ADJUST_STEP), -config.ROTATE_ADJUST_STEP)
         logger.info(f"[UR3] Wrist rotate: {drz:+.3f} rad")
-        return self.move_relative(drz=drz)
+
+        cur_joints = self.get_joint_positions()
+        # Rotate only the 6th joint (wrist rotation around tool Z-axis)
+        target_joints = list(cur_joints)
+        target_joints[5] += drz
+        return self.move_joints(target_joints)
 
     # ---------- WAYPOINT TRAVERSAL ----------
 

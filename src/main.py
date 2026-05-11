@@ -168,7 +168,12 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
     try:
         # 1. Move to initial task position
         print("Moving to task position...")
-        robot.move_joints(config.DESIRED_JOINTS)
+        ok = robot.move_joints(config.DESIRED_JOINTS)
+        if not ok:
+            print("ERROR: Failed to move to task position")
+            robot.disconnect()
+            return
+        robot.wait_for_motion_complete(timeout_s=10.0)
         logger_obj.log_event("robot_positioned", 0.0)
 
         # 2. Calibration (user stands upright, looks forward)
