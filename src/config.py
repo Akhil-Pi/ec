@@ -14,19 +14,7 @@ MOVE_ACCELERATION = 0.05  # m/s^2
 
 # Joint Config
 HOME_JOINTS    = [1.42383, -2.61049, -2.11889, 1.60235, 1.71181, 1.57638]
-POINT_1_JOINTS = [1.42507, -2.03308, -2.1191, 0.67063, 1.71179, 1.57622]
-POINT_2_JOINTS = [1.42504, -1.67897, -1.84024, -0.27436, 1.7118, 1.57618]
-POINT_3_JOINTS = [1.42485, -1.51767, -1.55773, -0.86834, 1.61473, 1.52516]
 DESIRED_JOINTS = [1.42351, -1.38754, -1.14521, -1.22057, 1.61412, 1.52513]
-
-JOINT_PATH = [HOME_JOINTS, POINT_1_JOINTS, POINT_2_JOINTS,
-              POINT_3_JOINTS, DESIRED_JOINTS]
-
-# Gradual transition
-TRANSITION_STEPS      = 12     # robot moves in 12 increments (was 20)
-TRANSITION_STEP_DELAY = 0.4   # seconds between each step (~10s total, was 30s)
-TRANSITION_SPEED      = 0.12   # slightly faster: 2.4 cm/s (was 0.05)
-TRANSITION_ACCEL      = 0.08   # slightly faster acceleration (was 0.04)
 
 # Adjustment steps
 Z_ADJUST_STEP    = 0.02   # 2cm vertical

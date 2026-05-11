@@ -197,34 +197,6 @@ class UR3Controller:
         print("\n[UR3] Traversal complete.")
         return True
 
-    def gradual_transition(self, joint_path=None, pss_callback=None):
-        """Gradually move to DESIRED via joint waypoints."""
-        joint_path = joint_path or config.JOINT_PATH
-        path       = joint_path[1:]   # skip HOME
-
-        print(f"\n[UR3] Gradual transition: {len(path)} steps")
-
-        for i, joints in enumerate(path):
-            logger.info(f"[UR3] Transition {i+1}/{len(path)}")
-            try:
-                ok = self.move_joints(joints, speed=0.05, acceleration=0.05)
-            except Exception as e:
-                logger.error(f"[UR3] Transition error: {e}")
-                return False
-            if not ok:
-                return False
-
-            if pss_callback is not None:
-                pss   = pss_callback()
-                delay = 8.0 if (pss and pss.get("pss_smooth", 1.0) < 0.25) else 4.0
-            else:
-                delay = 4.0
-
-            print(f"  Step {i+1}/{len(path)} done. Waiting {delay:.0f}s...")
-            time.sleep(delay)
-
-        print("[UR3] Transition complete.")
-        return True
 
     # ---------- HOME CHECK ----------
 
@@ -256,16 +228,14 @@ class UR3Controller:
         print(f"  Home:    {[round(v,3) for v in config.HOME_JOINTS]}")
 
         if auto_move:
-            print("Will reverse through JOINT_PATH to get home.")
-            print("Confirm each step individually. Hand on E-stop.\n")
+            print("Will move directly to HOME_JOINTS.")
+            print("Hand on E-stop.\n")
             ans = input("Proceed? (y/N): ").strip().lower()
             if ans != "y":
                 print("Aborted.")
                 return False
 
-            reverse = list(reversed(config.JOINT_PATH))
-            ok = self.move_through_joint_waypoints(
-                reverse, speed=0.05, acceleration=0.05, confirm_each=True)
+            ok = self.move_joints(config.HOME_JOINTS, speed=0.05, acceleration=0.05)
 
             if ok:
                 ok2, dist2 = self.is_at_home()

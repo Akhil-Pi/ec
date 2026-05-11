@@ -1,242 +1,155 @@
-# Quick Reference Guide - Empathetic Conservator v2
+# 🤖 Cobot 腕部旋转控制 - 快速参考
 
-**Last Updated**: 2026-05-08  
-**Version**: 2.0 (Dynamic Cooldown Support)
+## 核心逻辑 (30 秒理解)
 
----
+```
+修复家的动作              机械臂的反应
+─────────────────────────────────────
+向左倾斜 (-angle)    →   腕部向右旋转 (+drz)
+向右倾斜 (+angle)    →   腕部向左旋转 (-drz)
+低头                 →   升降 (+dz)
+向前靠               →   前移 (+dy)
+```
 
-## 🚀 Quick Start
+## 物理直觉
+
+想象修复家和机器人对着面坐：
+- 修复家头向左歪，想看左边 → 机器人向右转工件
+- 修复家头向右歪，想看右边 → 机器人向左转工件
+- **结果**: 工件始终在修复家的最佳视角
+
+## 关键参数速查
+
+| 参数 | 值 | 含义 |
+|------|-----|------|
+| `MIN_VISIBILITY` | 0.6 | 可见性阈值（低=容错强） |
+| `tilt_score > 0.3` | 触发值 | 倾斜检测灵敏度 |
+| `ROTATE_ADJUST_STEP` | 0.10 rad | 单次旋转幅度（~6°） |
+| `RAISE triggered` | `trunk > 0.5` | 升降触发条件 |
+
+## 代码位置快速定位
+
+| 功能 | 文件 | 函数 |
+|------|------|------|
+| 头部倾斜计算 | `pss_calculator.py` | `head_tilt_angle()` |
+| 干预决策 | `intervention_policy.py` | `_compute_interventions()` |
+| 腕部旋转执行 | `ur3_controller.py` | `adjust_rotate()` |
+| 参数配置 | `config.py` | `ROTATE_ADJUST_STEP` |
+
+## 调试流程
+
+### 症状: 旋转方向反了
+```
+修复家左倾 → 机械臂向左转（错误）
+解决: 检查 intervention_policy.py 中的符号
+    magnitude = -step * sign(tilt_angle)
+           ↑
+         这个负号控制方向反转
+```
+
+### 症状: 旋转不够灵敏
+```
+倾斜角度大但不旋转 → 可能 MIN_VISIBILITY 太高
+解决: 降低 MIN_VISIBILITY 从 0.6 → 0.5
+     或增加 tilt_score 阈值从 0.3 → 0.2
+```
+
+### 症状: 误触发（无倾斜也旋转）
+```
+修复家正常头位还在旋转 → 阈值太低
+解决: 提高 tilt_score 阈值从 0.3 → 0.4
+     或提高 MIN_VISIBILITY 从 0.6 → 0.7
+```
+
+## 测试命令
 
 ```bash
-# Control Group (Static table, no intervention)
-python main.py --participant P01 --condition control --simulate
+# 运行逻辑验证测试
+python3 test_tilt_to_rotate.py
 
-# Experimental Group (UR3 dynamic assistance)
-python main.py --participant P02 --condition experimental --simulate
-
-# Real execution (requires UR3 connection)
-python main.py --participant P03 --condition experimental
+# 预期输出: 
+# ✓ 左倾 → rotate RIGHT
+# ✓ 右倾 → rotate LEFT
+# ✓ 正常 → no rotation
 ```
 
----
+## 关键公式
 
-## 📋 Core Workflow
-
-### Control Group
+### 头部倾斜角计算
 ```
-Start → Calibration(15s) → Task(45min) → End
-      ↓                   ↓
-  Record baseline     📊 Record PSS only
-                      ❌ No UR3 intervention
+head_offset = head_x - shoulder_x
+tilt_angle = arctan(head_offset / shoulder_width) × (180/π)
+tilt_score = |tilt_angle| / 20°  (范围: 0-1)
 ```
 
-### Experimental Group  
+### 腕部旋转量
 ```
-Start → Calibration(15s) → Transition(~1min) → Task(45min) → End
-      ↓                   ↓                    ↓
-  Record baseline     UR3 moves to        PSS > 0.4
-                      task position       and sustained 2s
-                                          ↓
-                                        🤖 Intervene(raise/tilt)
-                                          ↓
-                                        ⏱️ Dynamic cooldown
-                                          ↓
-                                        📊 Record latency
+drz = -ROTATE_ADJUST_STEP × tilt_score × sign(tilt_angle)
+
+负号: 反向旋转（补偿）
+符号: 角度方向（负=左倾，正=右倾）
 ```
 
----
-
-## 🎯 Intervention Logic
-
+### PSS 权重（新）
 ```
-PSS exceeds 0.4 threshold?
-  ├─ No → Continue monitoring
-  ├─ Yes, but < 2s sustained → Continue monitoring
-  └─ Yes, and ≥ 2s sustained → Trigger intervention
-       ↓
-    Execute actions:
-    • Trunk > 0.4  → Raise (Z+)
-    • Cervical > 0.4 → Tilt (Rx+)
-       ↓
-    Wait for motion complete → Record latency
-       ↓
-    Dynamic cooldown (0.5~3.0s)
+PSS = 0.40 × trunk_score
+    + 0.30 × tilt_score
+    + 0.30 × lean_score
 ```
 
----
+## 常见问题 (FAQ)
 
-## ⏱️ Dynamic Cooldown Schedule
+**Q: 为什么要用反向旋转？**
+A: 修复家倾斜是为了看工件，机械臂跟着反向旋转保持工件在最佳角度。
 
-| Condition | Cooldown | Logged As | Scenario |
-|-----------|----------|-----------|----------|
-| PSS improvement > 0.1 | **1.0s** | fast_recovery | Participant self-correcting |
-| PSS > 0.60 | **1.5s** | high_pss | Situation deteriorating, need quick response |
-| 0.40-0.60 | **3.0s** | standard | Normal exceeding threshold |
-| PSS < 0.40 | **0.5s** | recovering | Recovering state |
+**Q: 升降逻辑还要吗？**
+A: 要的。升降是独立的，根据躯干倾斜（低头时抬升）。
 
----
+**Q: 如何处理机械臂遮挡胳膊？**
+A: 可见性阈值只需 0.6（非常低），容错能力强。
 
-## 📊 Output Files
+**Q: 可以同时升降和旋转吗？**
+A: 可以。干预策略会生成多个动作，机器人逐个执行。
 
-### frames.csv (Per-frame data)
+**Q: 旋转幅度是固定的吗？**
+A: 否。幅度 = 基础步长 × 倾斜分数，倾斜越厉害，旋转越大。
+
+## 关键文件对比
+
+### 旧系统
 ```
-timestamp_s, trunk_angle_deg, trunk_score, cervical_cm, 
-cervical_score, pss_raw, pss_smooth
-
-One row every 10 frames (10Hz sampling rate)
-```
-
-### events.csv (Intervention records)
-```
-timestamp_s, event_type, pss_at_event, actions, latency_s, details
-
-Intervention events: intervention
-├─ latency_s: 0.5-1.5 seconds (ensured by wait_for_motion_complete())
-├─ actions: format "raise:0.008|tilt:0.025"
-└─ details: "id=3" (intervention sequence number)
+躯干倾斜 → raise
+颈椎位移 → tilt （工件倾斜）
+向前靠 → forward
 ```
 
-### meta.txt (Session metadata)
+### 新系统 ✨
 ```
-participant_id: P01
-condition: experimental
-start_time: 2026-05-08T14:30:00
-duration_s: 2700
-frames_logged: 450
-events_logged: 8
-pss_threshold: 0.40
-pss_hysteresis: 0.10
+躯干倾斜 → raise （同上）
+头部左右倾斜 → rotate （腕部旋转）✨NEW
+向前靠 → forward （同上）
 ```
 
----
+## 验收标准
 
-## 🔧 Configuration Parameters
+- [ ] 左倾斜 → 右旋
+- [ ] 右倾斜 → 左旋
+- [ ] 升降仍正常
+- [ ] 机械臂不误触
+- [ ] 可见性检查有效
 
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| PSS_THRESHOLD | 0.40 | Intervention trigger point |
-| PSS_HYSTERESIS | 0.10 | Recovery threshold (0.30) |
-| sustained_seconds | 2.0 | Monitoring duration before trigger |
-| Z_ADJUST_STEP | 0.02m | Single raise magnitude |
-| TILT_ADJUST_STEP | 0.05rad | Single tilt magnitude |
-| cooldown_seconds | (dynamic) | 1.0-3.0 seconds |
+## 紧急停止
 
----
-
-## 🧪 Verification Checklist
-
-Before running:
-- [ ] UR3 connected and at HOME position
-- [ ] Camera working (seeing real-time video)
-- [ ] MediaPipe detecting human body
-- [ ] `data/sessions/` directory writable
-
-During execution:
-- [ ] See PSS real-time display bar (0.0-1.0)
-- [ ] Trunk and Cervical angles displaying reasonably
-- [ ] Timer countdown working normally
-
-After execution:
-- [ ] Generated `*_frames.csv` (should have ~450 rows)
-- [ ] Generated `*_events.csv`
-- [ ] Generated `*_meta.txt`
-
-Data validation:
-- **Control Group**: events.csv has no intervention rows ✓
-- **Experimental Group**: events.csv has intervention rows + latency_s column has values ✓
-
----
-
-## 🐛 Frequently Asked Questions
-
-**Q: Why is events.csv empty for control group?**  
-A: That's correct! Control group doesn't intervene, so no intervention events. PSS is only recorded in frames.csv.
-
-**Q: PSS never exceeds 0.4?**  
-A: ✓ That's also good! Means participant has excellent posture. Data is valid.
-
-**Q: latency_s is empty?**  
-A: ❌ Means wait_for_motion_complete() timed out. Check UR3 connection or increase timeout.
-
-**Q: Always showing "transitioning"?**  
-A: Normal. Experimental group needs ~1 minute to complete gradual_transition to task position.
-
-**Q: Interventions too frequent/too sparse?**  
-A: Check PSS_THRESHOLD configuration. Default 0.40 is reasonable.
-
----
-
-## 📈 Data Analysis Tips
-
-### Control Group
-```python
-# Calculate mean PSS
-df_control = pd.read_csv('*_control_*_frames.csv')
-mean_pss = df_control['pss_smooth'].mean()
-```
-
-### Experimental Group
-```python
-# Intervention effectiveness
-df_frames = pd.read_csv('*_experimental_*_frames.csv')
-df_events = pd.read_csv('*_experimental_*_events.csv')
-
-# Number of interventions
-n_interventions = df_events[df_events['event_type']=='intervention'].shape[0]
-
-# Average latency (for Spearman analysis)
-latencies = df_events['latency_s'].dropna()
-mean_latency = latencies.mean()
-
-# PSS changes before and after intervention
-# (analyze effectiveness, see pss_at_event in *_events.csv)
-```
-
----
-
-## 🎓 Key Research Metrics
-
-| Metric | Location | Purpose |
-|--------|----------|---------|
-| PSS score sequence | frames.csv | Primary observation variable |
-| Intervention count | events.csv row count | Problem severity |
-| **Latency** | latency_s column | Spearman correlation analysis |
-| Trunk angle | trunk_angle_deg | Trunk inclination degree |
-| Cervical displacement | cervical_cm | Forward head displacement |
-| Dynamic cooldown reason | cooldown() log | Participant response pattern |
-
----
-
-## 📞 Debugging Commands
-
+如有异常旋转：
 ```bash
-# View latest session
-ls -lrt data/sessions/ | tail -5
-
-# Check control group has no interventions
-grep "intervention" data/sessions/*_control_*_events.csv
-
-# Check experimental group has latency
-grep "intervention" data/sessions/*_experimental_*_events.csv | cut -d, -f5 | head -10
-
-# View PSS statistics
-python3 -c "
-import pandas as pd
-df = pd.read_csv('data/sessions/P01_experimental_*_frames.csv')
-print(df['pss_smooth'].describe())
-"
+# 1. 按机械臂E-Stop
+# 2. 禁用 rotate 动作:
+#    在 _compute_interventions() 中注释 rotate 部分
+# 3. 排查 tilt_angle 计算
 ```
 
 ---
 
-## 🎯 Guarantees After Fixes
-
-✅ **Latency Accuracy**: wait_for_motion_complete() ensures actual motion completion  
-✅ **Control Group Isolation**: condition parameter prevents unintended interventions  
-✅ **Fast Response**: Dynamic cooldown re-evaluates high PSS within 1.5s  
-✅ **Defensive Programming**: Missing PSS fields handled gracefully  
-✅ **Research Validity**: Clear intervention decision logs for subsequent analysis  
-
----
-
-**Ready to run the experiment! 🚀**
+**最后更新**: 2026-05-11  
+**版本**: 1.0  
+**测试状态**: ✅ 已验证

@@ -165,36 +165,22 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
-    # Shared PSS state for the transition thread to read
-    latest_pss = {"pss_smooth": 1.0}
-
     try:
-        # 1. Go to home
-        print("Moving to HOME_JOINTS via safe path...")
-        # If robot is near DESIRED_POSE already, traverse waypoints in reverse
-        # For now assume robot starts near HOME_JOINTS
-        robot.go_home()
-        logger_obj.log_event("robot_home", 0.0)
+        # 1. Move to task position
+        if condition == "experimental":
+            print("Moving to task position...")
+            robot.move_joints(config.DESIRED_JOINTS)
+            logger_obj.log_event("robot_positioned", 0.0)
+        else:
+            # Control group: ensure robot is at home
+            robot.go_home()
+            logger_obj.log_event("robot_home", 0.0)
 
         # 2. Calibration (user stands upright, looks forward)
         print("\nTell participant: stand upright, look straight ahead.")
         calibration_phase(detector, pss_calc, cap, logger_obj)
 
-        # 3. Start gradual transition to DESIRED_POSE in a background thread
-        #    so the vision loop keeps running while the robot moves
-        import threading
-
-        def do_transition():
-            if condition == "experimental":
-                robot.gradual_transition(
-                    pss_callback=lambda: latest_pss   # no path argument — uses JOINT_PATH
-            )
-
-        transition_thread = threading.Thread(target=do_transition, daemon=True)
-        transition_thread.start()
-        logger_obj.log_event("transition_started", 0.0)
-
-        # 4. Task phase
+        # 3. Task phase
         print(f"\n=== TASK PHASE ({duration_s/60:.0f} min) ===")
         print("Press 'q' to abort. Press 'i' to mark a manual event.")
         start = time.time()
@@ -219,30 +205,21 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
                 continue
 
             pss_components = pss_calc.compute(landmarks)
-            latest_pss.update(pss_components)   # share with transition thread
             logger_obj.log_frame(pss_components)
 
-            action_info = {"triggered": False, "reason": ""}
-
-            # For experimental: wait for robot to finish gradual transition
-            # before enabling fine adjustments. For control: policy already
-            # returns "control_group" reason.
-            if condition == "experimental" and transition_thread.is_alive():
-                action_info["reason"] = "transitioning"
-            else:
-                action_info = policy.evaluate(pss_components, robot)
-                if action_info["triggered"]:
-                    logger_obj.log_event(
-                        "intervention",
-                        pss_components["pss_smooth"],
-                        actions=action_info["interventions"],
-                        latency_s=action_info.get("latency_s"),
-                        details=f"id={action_info.get('intervention_id')}"
-                    )
+            action_info = policy.evaluate(pss_components, robot)
+            if action_info["triggered"]:
+                logger_obj.log_event(
+                    "intervention",
+                    pss_components["pss_smooth"],
+                    actions=action_info["interventions"],
+                    latency_s=action_info.get("latency_s"),
+                    details=f"id={action_info.get('intervention_id')}"
+                )
 
             frame = render_overlay(frame, pss_components, action_info,
                                    elapsed, duration_s,
-                                   transitioning=transition_thread.is_alive())
+                                   transitioning=False)
             cv2.imshow("Empathetic Conservator", frame)
 
             key = cv2.waitKey(1) & 0xFF
