@@ -59,6 +59,24 @@ FRAME_WIDTH  = 1280
 FRAME_HEIGHT = 720
 TARGET_FPS   = 30
 
+# Camera position relative to participant ("left", "center", "right")
+# Used to compensate cervical displacement detection based on camera angle
+CAMERA_POSITION = "left"  # 摄像头在参与者左前方
+CERVICAL_SENSITIVITY_COMPENSATE = {
+    "left": {
+        "positive": 1.0,   # 向右倾时灵敏度
+        "negative": 1.4,   # 向左倾时灵敏度（需要补偿）
+    },
+    "center": {
+        "positive": 1.0,
+        "negative": 1.0,
+    },
+    "right": {
+        "positive": 1.4,
+        "negative": 1.0,
+    },
+}
+
 # MediaPipe Pose: 0=lite, 1=full, 2=heavy
 POSE_MODEL_COMPLEXITY = 1
 POSE_MIN_DETECTION_CONFIDENCE = 0.6

@@ -121,6 +121,9 @@ class PSSCalculator:
         SIGNED version: positive = head forward to right, negative = head forward to left
         Map: 0 cm -> 0, ±5 cm -> ±1.0 (proposal IV.B).
         Returns (displacement_cm_signed, score_in_[0,1]).
+
+        Camera position compensation: If camera is on left/right, adjust sensitivity
+        for tilt in blind direction (e.g., left tilt harder to detect from left-front camera).
         """
         if landmarks is None:
             return 0.0, 0.0
@@ -159,6 +162,17 @@ class PSSCalculator:
         # Subtract individual neutral baseline if calibrated
         if self._neutral_cervical_offset is not None:
             displacement_cm = displacement_cm - self._neutral_cervical_offset
+
+        # Apply camera position compensation to improve detection in blind direction
+        camera_pos = config.CAMERA_POSITION
+        if camera_pos in config.CERVICAL_SENSITIVITY_COMPENSATE:
+            if displacement_cm > 0:
+                # Head tilted right
+                multiplier = config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["positive"]
+            else:
+                # Head tilted left
+                multiplier = config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["negative"]
+            displacement_cm *= multiplier
 
         # Score uses absolute value (magnitude), but displacement keeps sign
         score = abs(displacement_cm) / config.CERVICAL_MAX_CM
