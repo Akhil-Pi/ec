@@ -7,21 +7,34 @@ Policy logic (intentionally simple and interpretable for the report):
   - PSS < threshold        -> no action
   - PSS >= threshold       -> arm a "monitoring" timer
   - Sustained >= 2 seconds -> trigger correction
-  - After correction       -> 5-second cooldown
+  - After correction       -> 5-second cooldown (dynamic, PSS-dependent)
   - Hysteresis             -> PSS must drop below (threshold - 0.10) to reset
 
-Correction strategy:
-  - High trunk inclination  -> raise artifact (Z+)
-  - High cervical disp.     -> tilt artifact toward conservator (rx+)
-  - Both                    -> combined intervention
+Correction strategy (NEW: Directional Tilt → Wrist Rotation):
+  - High trunk inclination    -> raise artifact (Z+, for low-head posture)
+  - Head left tilt            -> rotate wrist RIGHT (counterclockwise, positive drz)
+  - Head right tilt           -> rotate wrist LEFT (clockwise, negative drz)
+  - Forward lean              -> bring artifact toward participant (Y+)
+  - Multiple issues           -> combined interventions
+
+Rationale:
+  Camera mounted on upper-left at ~15° elevation (low-angle, upward-looking).
+  When conservator tilts head left/right, wrist rotates opposite direction
+  to keep artifact in optimal viewing angle.
+
+Robustness:
+  - Visibility checks (0.6+ confidence) to handle arm occlusion
+  - Dynamic cooldown based on PSS improvement trajectory
+  - Fallback raise for unspecified high PSS
 
 Latency tracking:
-  - Records the timestamp at threshold crossing (t_arm)
-  - Records the timestamp the robot completes its first move (t_act)
-  - Latency = t_act - t_arm  (used for proposal's Spearman analysis)
+  - Records timestamp at threshold crossing (t_arm)
+  - Records timestamp when robot completes motion (t_act)
+  - Latency = t_act - t_arm
 """
 import time
 import logging
+import numpy as np
 import config
 
 logger = logging.getLogger(__name__)
@@ -135,6 +148,8 @@ class InterventionPolicy:
         for action, magnitude in interventions:
             if action == "raise":
                 ok = robot.adjust_height(magnitude)
+            elif action == "rotate":
+                ok = robot.adjust_rotate(magnitude)
             elif action == "tilt":
                 ok = robot.adjust_tilt(magnitude)
             elif action == "forward":
@@ -171,27 +186,38 @@ class InterventionPolicy:
 
     def _compute_interventions(self, pss_components):
         actions = []
-        trunk       = pss_components.get("trunk_score",    0.0)
-        cervical    = pss_components.get("cervical_score", 0.0)
-        cervical_cm = pss_components.get("cervical_cm",    0.0)
-        lean        = pss_components.get("lean_score",     0.0)
+        trunk        = pss_components.get("trunk_score",    0.0)
+        tilt_score   = pss_components.get("tilt_score",     0.0)
+        tilt_angle   = pss_components.get("tilt_angle_deg", 0.0)
+        lean         = pss_components.get("lean_score",     0.0)
 
-    # Forward lean detected → bring artifact toward participant (Y axis)
+        logger.debug(f"[POLICY] _compute_interventions: "
+                     f"trunk={trunk:.3f}, tilt_score={tilt_score:.3f}, "
+                     f"tilt_angle={tilt_angle:.1f}°, lean={lean:.3f}")
+
+        # Forward lean detected → bring artifact toward participant (Y axis)
         if lean > 0.3:
             actions.append(("forward", config.Y_ADJUST_STEP * lean))
 
-    # Trunk inclined → raise artifact
-        if trunk > 0.4:
+        # Trunk inclined → raise artifact
+        if trunk > 0.5:
             actions.append(("raise", config.Z_ADJUST_STEP * trunk))
+            logger.info(f"[POLICY] Trunk intervention: score={trunk:.3f} → raise")
 
-    # Cervical displacement → tilt artifact
-        if cervical > 0.4:
-            magnitude = config.TILT_ADJUST_STEP * cervical
-            if cervical_cm < 0:
-                magnitude = -magnitude
-            actions.append(("tilt", magnitude))
+        # Head tilt (left/right) → wrist rotation
+        # Positive angle = head tilted right → rotate wrist LEFT (negative drz)
+        # Negative angle = head tilted left → rotate wrist RIGHT (positive drz)
+        if tilt_score > 0.3:
+            # Invert the sign: head right → wrist left
+            magnitude = -config.ROTATE_ADJUST_STEP * tilt_score * np.sign(tilt_angle)
+            actions.append(("rotate", magnitude))
+            direction = "LEFT" if magnitude > 0 else "RIGHT"
+            logger.info(f"[POLICY] Head tilt intervention: "
+                        f"score={tilt_score:.3f}, angle={tilt_angle:.1f}° → rotate {direction}")
 
         if not actions:
-            actions.append(("raise", config.Z_ADJUST_STEP * 0.5))
+            # Fallback: when PSS exceeds threshold but no specific intervention needed
+            actions.append(("raise", config.Z_ADJUST_STEP * 0.3))
+            logger.debug(f"[POLICY] Fallback raise (PSS high but no major issues)")
 
         return actions

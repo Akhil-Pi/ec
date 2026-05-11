@@ -32,7 +32,8 @@ TRANSITION_ACCEL      = 0.08   # slightly faster acceleration (was 0.04)
 Z_ADJUST_STEP    = 0.02   # 2cm vertical
 X_ADJUST_STEP    = 0.02   # 2cm lateral
 Y_ADJUST_STEP    = 0.02   # 2cm depth
-TILT_ADJUST_STEP = 0.05   # ~3 degrees
+TILT_ADJUST_STEP = 0.05   # ~3 degrees (deprecated)
+ROTATE_ADJUST_STEP = 0.10  # ~6 degrees wrist rotation (drz)
 
 PARTICIPANT_POSTURE = "standing"
 

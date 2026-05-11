@@ -142,6 +142,16 @@ class UR3Controller:
         logger.info(f"[UR3] Tilt: {drx:+.3f} rad")
         return self.move_relative(drx=drx)
 
+    def adjust_rotate(self, drz):
+        """
+        Rotate wrist around Z-axis (tool frame).
+        Positive drz = counterclockwise, negative = clockwise (when viewed from above).
+        Maps to the 6th TCP component (tool rotation around z).
+        """
+        drz = max(min(drz, config.ROTATE_ADJUST_STEP), -config.ROTATE_ADJUST_STEP)
+        logger.info(f"[UR3] Wrist rotate: {drz:+.3f} rad")
+        return self.move_relative(drz=drz)
+
     # ---------- WAYPOINT TRAVERSAL ----------
 
     def move_through_joint_waypoints(self, joint_path, speed=None,
