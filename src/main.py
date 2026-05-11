@@ -152,21 +152,13 @@ def run_session(participant_id, condition, simulate=False, duration_min=None):
     policy    = InterventionPolicy(condition=condition)
     logger_obj = SessionLogger(participant_id, condition)
     robot     = UR3Controller(simulate=simulate)
-    if not simulate:
-        print("\nChecking home position...")
-        at_home = robot.ensure_at_home(auto_move=True)
-        if not at_home:
-            print("ERROR: Robot not at home. Aborting session.")
-            robot.disconnect()
-            return
-        logger_obj.log_event("home_verified", 0.0)
 
     cap = cv2.VideoCapture(config.CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
     try:
-        # 1. Move to initial task position
+        # 1. Move directly to task position (skip HOME)
         print("Moving to task position...")
         ok = robot.move_joints(config.DESIRED_JOINTS)
         if not ok:
