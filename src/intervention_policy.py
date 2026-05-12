@@ -193,8 +193,6 @@ class InterventionPolicy:
         actions  = []
         cervical    = pss_components.get("cervical_score", 0.0)
         cervical_cm = pss_components.get("cervical_cm",    0.0)
-        gaze        = pss_components.get("gaze_score",     0.0)
-        gaze_mag    = abs(gaze)
 
         # Forward lean (bending) → raise artifact to reduce reaching distance
         lean_score = pss_components.get("lean_score", 0.0)
@@ -210,9 +208,6 @@ class InterventionPolicy:
                 magnitude = -magnitude
             actions.append(("rotate", magnitude))
 
-        # Lateral move — bring artifact toward the side user is leaning
-        if gaze_mag > 0.4:
-            actions.append(("lateral", config.X_ADJUST_STEP * gaze))
 
         if not actions:
             actions.append(("raise", config.Z_ADJUST_STEP * 0.4))
