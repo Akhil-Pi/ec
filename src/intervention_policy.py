@@ -194,10 +194,10 @@ class InterventionPolicy:
         cervical    = pss_components.get("cervical_score", 0.0)
         cervical_cm = pss_components.get("cervical_cm",    0.0)
 
-        # Forward lean (bending) → raise artifact to reduce reaching distance
-        lean_score = pss_components.get("lean_score", 0.0)
-        if lean_score > 0.3:
-            actions.append(("raise", config.Z_ADJUST_STEP * lean_score))
+        # Forward bending (trunk inclination) → raise artifact to reduce reaching distance
+        trunk_score = pss_components.get("trunk_score", 0.0)
+        if trunk_score > 0.3:
+            actions.append(("raise", config.Z_ADJUST_STEP * trunk_score))
 
         # Cervical directional rotation — compensate user's head tilt with wrist rotation
         # When user tilts head left (cervical_cm < 0), rotate robot RIGHT (positive)
