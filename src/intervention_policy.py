@@ -138,12 +138,14 @@ class InterventionPolicy:
         t_arm = self._above_threshold_since
         interventions = self._compute_postural_interventions(pss_components)
 
-        dx = dy = dz = drx = 0.0
+        dx = dy = dz = 0.0
+        rotate_magnitude = 0.0
+
         for action, magnitude in interventions:
             if action == "raise":
                 dz  += magnitude
-            elif action == "tilt":
-                drx += magnitude
+            elif action == "rotate":
+                rotate_magnitude += magnitude  # separate from tilt
             elif action == "forward":
                 dy  += magnitude
             elif action == "lateral":
@@ -152,13 +154,16 @@ class InterventionPolicy:
         dz  = max(min(dz,  config.Z_ADJUST_STEP),    -config.Z_ADJUST_STEP)
         dx  = max(min(dx,  config.X_ADJUST_STEP),    -config.X_ADJUST_STEP)
         dy  = max(min(dy,  config.Y_ADJUST_STEP),    -config.Y_ADJUST_STEP)
-        drx = max(min(drx, config.TILT_ADJUST_STEP), -config.TILT_ADJUST_STEP)
 
-        if any([dx, dy, dz, drx]):
-            ok = robot.move_relative(dx=dx, dy=dy, dz=dz,
-                                    drx=drx, asynchronous=True)
+        # Execute linear moves (raise, forward, lateral)
+        if any([dx, dy, dz]):
+            ok = robot.move_relative(dx=dx, dy=dy, dz=dz, asynchronous=True)
             if not ok:
                 logger.warning("[POLICY] Postural intervention blocked")
+
+        # Execute wrist rotation separately
+        if abs(rotate_magnitude) > 0.001:
+            robot.adjust_rotation(rotate_magnitude)
 
         time.sleep(0.05)
         t_act = time.time()
@@ -179,7 +184,7 @@ class InterventionPolicy:
             "latency_s":        t_act - t_arm,
         })
         logger.info(f"[POLICY] PSS intervention #{self._intervention_count}: "
-                    f"PSS={pss:.3f} dz={dz:+.3f} drx={drx:+.3f} "
+                    f"PSS={pss:.3f} dz={dz:+.3f} rotate={rotate_magnitude:+.3f} "
                     f"dx={dx:+.3f} dy={dy:+.3f}")
         return result
 
@@ -196,12 +201,14 @@ class InterventionPolicy:
         if gaze_mag > 0.4:
             actions.append(("raise",   config.Z_ADJUST_STEP * gaze_mag))
 
-        # Cervical directional tilt — only when clearly displaced
+        # Cervical directional rotation — compensate user's head tilt with wrist rotation
+        # When user tilts head left (cervical_cm < 0), rotate robot RIGHT (positive)
+        # When user tilts head right (cervical_cm > 0), rotate robot LEFT (negative)
         if cervical > 0.25:
-            magnitude = config.TILT_ADJUST_STEP * cervical
-            if cervical_cm < 0:
+            magnitude = config.ROTATION_ADJUST_STEP * cervical
+            if cervical_cm > 0:  # head tilted right → rotate left (negative)
                 magnitude = -magnitude
-            actions.append(("tilt", magnitude))
+            actions.append(("rotate", magnitude))
 
         # Lateral move — bring artifact toward the side user is leaning
         if gaze_mag > 0.4:
