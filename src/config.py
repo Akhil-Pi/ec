@@ -29,10 +29,11 @@ DESIRED_JOINTS  = [1.42351, -1.38754, -1.14521, -1.22057, 1.61412, 1.52513]
 #TRANSITION_ACCEL      = 2.0   # slightly faster acceleration (was 0.04)
 
 # Adjustment steps
-Z_ADJUST_STEP    = 0.02   # 2cm vertical
-X_ADJUST_STEP    = 0.02   # 2cm lateral
-Y_ADJUST_STEP    = 0.02   # 2cm depth
-TILT_ADJUST_STEP = 0.05   # ~3 degrees
+Z_ADJUST_STEP      = 0.02   # 2cm vertical
+X_ADJUST_STEP      = 0.02   # 2cm lateral
+Y_ADJUST_STEP      = 0.02   # 2cm depth
+TILT_ADJUST_STEP   = 0.05   # ~3 degrees (deprecated, use ROTATION_ADJUST_STEP)
+ROTATION_ADJUST_STEP = 0.05   # ~3 degrees around Z-axis for workpiece rotation
 
 PARTICIPANT_POSTURE = "standing"
 

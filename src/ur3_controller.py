@@ -124,6 +124,11 @@ class UR3Controller:
         logger.info(f"[UR3] Tilt: {drx:+.3f} rad")
         return self.move_relative(drx=drx, asynchronous=True)
 
+    def adjust_rotation(self, drz):
+        drz = max(min(drz, config.ROTATION_ADJUST_STEP), -config.ROTATION_ADJUST_STEP)
+        logger.info(f"[UR3] Rotation: {drz:+.3f} rad")
+        return self.move_relative(drz=drz, asynchronous=True)
+
     def disconnect(self):
         if self.simulate:
             return

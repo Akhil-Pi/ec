@@ -132,16 +132,16 @@ class InterventionPolicy:
         interventions = self._compute_interventions(pss_components)
 
         # Execute the ergonomic correction as one small TCP nudge.
-        dz = drx = 0.0
+        dz = drz = 0.0
         for action, magnitude in interventions:
             if action == "raise":
                 dz += magnitude
-            elif action == "tilt":
-                drx += magnitude
+            elif action == "rotation":
+                drz += magnitude
             else:
                 logger.warning(f"[POLICY] Unknown intervention {action}")
 
-        ok = robot.move_relative(dz=dz, drx=drx,
+        ok = robot.move_relative(dz=dz, drz=drz,
                                  asynchronous=True)
         if not ok:
             logger.warning("[POLICY] Combined intervention blocked")
@@ -178,21 +178,23 @@ class InterventionPolicy:
         cervical_cm = pss_components.get("cervical_cm",    0.0)
         lean        = pss_components.get("lean_score",     0.0)
 
-        # Forward/down strain: raise and tilt the artifact.
+        # Forward/down strain: raise and rotate the artifact.
         posture_drive = max(lean, trunk)
         if posture_drive > 0.25:
             actions.append(("raise", config.Z_ADJUST_STEP * posture_drive))
-            actions.append(("tilt", config.TILT_ADJUST_STEP * posture_drive))
+            actions.append(("rotation", config.ROTATION_ADJUST_STEP * posture_drive))
 
-        # Cervical displacement: add directional tilt.
+        # Cervical displacement: add directional rotation.
+        # cervical_cm < 0: head tilts left → rotate clockwise (positive drz)
+        # cervical_cm > 0: head tilts right → rotate counter-clockwise (negative drz)
         if cervical > 0.3:
-            magnitude = config.TILT_ADJUST_STEP * cervical
-            if cervical_cm < 0:
+            magnitude = config.ROTATION_ADJUST_STEP * cervical
+            if cervical_cm > 0:
                 magnitude = -magnitude
-            actions.append(("tilt", magnitude))
+            actions.append(("rotation", magnitude))
 
         if not actions:
             actions.append(("raise", config.Z_ADJUST_STEP * 0.5))
-            actions.append(("tilt", config.TILT_ADJUST_STEP * 0.5))
+            actions.append(("rotation", config.ROTATION_ADJUST_STEP * 0.5))
 
         return actions
