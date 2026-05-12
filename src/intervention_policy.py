@@ -196,10 +196,10 @@ class InterventionPolicy:
         gaze        = pss_components.get("gaze_score",     0.0)
         gaze_mag    = abs(gaze)
 
-        # Leaning to reach artifact → raise it so user doesn't have to reach as far
-        # Use gaze magnitude as proxy for reaching effort
-        if gaze_mag > 0.4:
-            actions.append(("raise",   config.Z_ADJUST_STEP * gaze_mag))
+        # Forward lean (bending) → raise artifact to reduce reaching distance
+        lean_score = pss_components.get("lean_score", 0.0)
+        if lean_score > 0.3:
+            actions.append(("raise", config.Z_ADJUST_STEP * lean_score))
 
         # Cervical directional rotation — compensate user's head tilt with wrist rotation
         # When user tilts head left (cervical_cm < 0), rotate robot RIGHT (positive)
