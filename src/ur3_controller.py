@@ -20,6 +20,7 @@ class UR3Controller:
         self.simulate = simulate or not RTDE_AVAILABLE
         self.rtde_c  = None
         self.rtde_r  = None
+        self._accumulated_rotation = 0.0   # track total J6 rotation from start
 
         if not self.simulate:
             print(f"[UR3] Connecting to {self.ip} ...")
@@ -58,11 +59,11 @@ class UR3Controller:
         return self.rtde_c.moveJ(joint_positions, speed, acceleration)
 
     def move_to_desired(self):
-        """Move directly to DESIRED_JOINTS."""
         print("[UR3] Moving to DESIRED position...")
         ok = self.move_joints(config.DESIRED_JOINTS, speed=0.05,
-                              acceleration=0.05)
+                            acceleration=0.05)
         if ok:
+            self._accumulated_rotation = 0.0   # reset tracker
             print("[UR3] At DESIRED position.")
         return ok
 
@@ -77,7 +78,7 @@ class UR3Controller:
         if self.simulate:
             time.sleep(0.05)
             return True
-            #return self.rtde_c.
+            #return self.rtde_c.mo
         return self.rtde_c.moveL(target_pose, speed, acceleration, asynchronous)
 
     def wait_for_motion_complete(self, timeout_s=5.0):
@@ -123,6 +124,54 @@ class UR3Controller:
         drx = max(min(drx, config.TILT_ADJUST_STEP), -config.TILT_ADJUST_STEP)
         logger.info(f"[UR3] Tilt: {drx:+.3f} rad")
         return self.move_relative(drx=drx, asynchronous=True)
+
+    def adjust_rotation(self, delta_j6):
+        import math
+        MAX_ROTATION = math.radians(35)
+
+        new_total = self._accumulated_rotation + delta_j6
+        if abs(new_total) > MAX_ROTATION:
+            delta_j6 = MAX_ROTATION * (1 if delta_j6 > 0 else -1) \
+                    - self._accumulated_rotation
+            if abs(delta_j6) < 0.001:
+                logger.info("[UR3] Rotation limit reached")
+                return True
+
+        delta_j6 = max(min(delta_j6,  config.ROTATION_ADJUST_STEP),
+                                -config.ROTATION_ADJUST_STEP)
+
+        if self.simulate:
+            self._accumulated_rotation += delta_j6
+            return True
+
+        current_joints = self.get_joint_positions()
+        target_joints  = list(current_joints)
+        target_joints[5] += delta_j6
+
+        logger.info(f"[UR3] Rotate J6: {delta_j6:+.3f} rad "
+                    f"(total: {math.degrees(new_total):.1f} deg / "
+                    f"limit: ±{math.degrees(MAX_ROTATION):.0f} deg)")
+
+        # asynchronous=True — vision loop keeps running during rotation
+        ok = self.rtde_c.moveJ(target_joints, 0.1, 0.1, True)
+        if ok:
+            self._accumulated_rotation = new_total
+        return ok
+
+    def reset_rotation(self):
+        """Return artifact to original rotation. Call between participants."""
+        import math
+        if abs(self._accumulated_rotation) < 0.001:
+            return True
+        current_joints = self.get_joint_positions()
+        target_joints  = list(current_joints)
+        target_joints[5] -= self._accumulated_rotation
+        logger.info(f"[UR3] Resetting rotation "
+                    f"({math.degrees(self._accumulated_rotation):.1f} deg -> 0)")
+        ok = self.rtde_c.moveJ(target_joints, 0.1, 0.1, False)
+        if ok:
+            self._accumulated_rotation = 0.0
+        return ok
 
     def disconnect(self):
         if self.simulate:

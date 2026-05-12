@@ -23,13 +23,14 @@ Latency tracking:
 import time
 import logging
 import config
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class InterventionPolicy:
     def __init__(self, condition="experimental", threshold=None, hysteresis=None,
-                 sustained_seconds=0.5, cooldown_seconds=3.0):
+                 sustained_seconds=0.75, cooldown_seconds=1.5):
         assert condition in ("control", "experimental"), \
             "condition must be 'control' or 'experimental'"
         self.condition = condition
@@ -37,9 +38,11 @@ class InterventionPolicy:
         self.hysteresis = hysteresis or config.PSS_HYSTERESIS
         self.sustained_seconds = sustained_seconds
         self.cooldown_seconds = cooldown_seconds
+        self._last_rotation_at = float("-inf")
 
         self._above_threshold_since = None
         self._last_intervention_at = float("-inf")
+        self._rotation_cooldown = 2.0
         self._last_pss_at_intervention = None
         self._intervention_count = 0
         self._in_corrected_state = False
@@ -52,26 +55,37 @@ class InterventionPolicy:
         self._in_corrected_state = False
 
     def evaluate(self, pss_components, robot, now=None):
-        """
-        Decide and execute intervention if appropriate.
-        For control group, only monitors PSS but never intervenes.
-        """
         now = now or time.time()
 
-        # Defensive checks for required fields
         if not pss_components or "pss_smooth" not in pss_components:
-            logger.error("[POLICY] Missing 'pss_smooth' in pss_components")
-            return {"triggered": False, "reason": "error", "interventions": [], "pss": 0.0}
+            logger.error("[POLICY] Missing pss_smooth")
+            return {"triggered": False, "reason": "error",
+                    "interventions": [], "pss": 0.0}
 
-        pss = pss_components["pss_smooth"]
+        pss  = pss_components["pss_smooth"]
+        gaze = pss_components.get("gaze_score", 0.0)
         result = {"triggered": False, "reason": "",
-                  "interventions": [], "pss": pss}
+                "interventions": [], "pss": pss}
 
-        # Control group: only log PSS, never intervene
         if self.condition == "control":
             result["reason"] = "control_group"
             return result
 
+        # ── ROTATION (independent of PSS, own cooldown) ──────────────────────
+        rotation_triggered = False
+        if abs(gaze) > 0.5 and pss >= (self.threshold * 0.6):
+            # Only rotate if there's at least some postural strain
+            # threshold * 0.6 = 0.15 — low bar but filters pure noise
+            time_since_rotate = now - self._last_rotation_at
+            if time_since_rotate >= self._rotation_cooldown:
+                magnitude = -config.ROTATION_ADJUST_STEP * gaze
+                robot.adjust_rotation(magnitude)
+                self._last_rotation_at = now
+                rotation_triggered = True
+                logger.info(f"[POLICY] Rotation: gaze={gaze:+.2f} "
+                            f"PSS={pss:.3f} mag={magnitude:+.3f}")
+
+        # ── PSS-BASED POSTURAL CORRECTION (raise / tilt / forward / lateral) ─
         # Hysteresis recovery
         if (self._in_corrected_state
                 and pss < (self.threshold - self.hysteresis)):
@@ -79,120 +93,121 @@ class InterventionPolicy:
             self._above_threshold_since = None
             logger.info(f"[POLICY] Recovered: PSS={pss:.3f}")
 
-        # Dynamic cooldown: adjust based on PSS improvement and current level
+        # PSS cooldown
         if self._last_intervention_at != float("-inf"):
             time_since_last = now - self._last_intervention_at
-
-            # Check if PSS has improved since last intervention
             pss_improvement = (self._last_pss_at_intervention - pss
-                              if self._last_pss_at_intervention else 0.0)
+                            if self._last_pss_at_intervention else 0.0)
 
-            # Strategy: if PSS improved > 0.1, allow faster re-evaluation
             if pss_improvement > 0.10:
-                # Participant is actively correcting, use very short cooldown (1s)
                 dynamic_cooldown = 0.5
-                cooldown_reason = "fast_recovery"
-            # If PSS is much higher than threshold, need quick response (1.5s cooldown)
             elif pss >= (self.threshold + 0.20):
                 dynamic_cooldown = 0.8
-                cooldown_reason = "high_pss"
-            # If PSS is moderately above threshold, use standard cooldown
             elif pss >= self.threshold:
                 dynamic_cooldown = 1.0
-                cooldown_reason = "standard"
-            # If PSS dropped below threshold, minimal cooldown (0.5s)
             else:
                 dynamic_cooldown = 0.3
-                cooldown_reason = "recovering"
 
             if time_since_last < dynamic_cooldown:
-                result["reason"] = f"cooldown({cooldown_reason}:{dynamic_cooldown:.1f}s)"
+                reason = "rotation_only" if rotation_triggered else "cooldown"
+                result["reason"] = reason
+                result["triggered"] = rotation_triggered
                 return result
 
-        # Below threshold
+        # Below PSS threshold
         if pss < self.threshold:
             self._above_threshold_since = None
-            result["reason"] = "below_threshold"
+            result["reason"] = "rotation_only" if rotation_triggered else "below_threshold"
+            result["triggered"] = rotation_triggered
             return result
 
-        # Threshold exceeded - first time? Start arming timer.
+        # Arm sustained timer
         if self._above_threshold_since is None:
             self._above_threshold_since = now
             result["reason"] = "monitoring"
+            result["triggered"] = rotation_triggered
             return result
 
-        # Sustained?
         sustained = now - self._above_threshold_since
         if sustained < self.sustained_seconds:
             result["reason"] = f"sustained({sustained:.1f}s)"
+            result["triggered"] = rotation_triggered
             return result
 
-        # ----- TRIGGER -----
+        # ── TRIGGER PSS INTERVENTION ─────────────────────────────────────────
         t_arm = self._above_threshold_since
-        interventions = self._compute_interventions(pss_components)
+        interventions = self._compute_postural_interventions(pss_components)
 
-        # Execute the ergonomic correction as one small TCP nudge.
-        dz = drx = 0.0
+        dx = dy = dz = drx = 0.0
         for action, magnitude in interventions:
             if action == "raise":
-                dz += magnitude
+                dz  += magnitude
             elif action == "tilt":
                 drx += magnitude
-            else:
-                logger.warning(f"[POLICY] Unknown intervention {action}")
+            elif action == "forward":
+                dy  += magnitude
+            elif action == "lateral":
+                dx  += magnitude
 
-        ok = robot.move_relative(dz=dz, drx=drx,
-                                 asynchronous=True)
-        if not ok:
-            logger.warning("[POLICY] Combined intervention blocked")
+        dz  = max(min(dz,  config.Z_ADJUST_STEP),    -config.Z_ADJUST_STEP)
+        dx  = max(min(dx,  config.X_ADJUST_STEP),    -config.X_ADJUST_STEP)
+        dy  = max(min(dy,  config.Y_ADJUST_STEP),    -config.Y_ADJUST_STEP)
+        drx = max(min(drx, config.TILT_ADJUST_STEP), -config.TILT_ADJUST_STEP)
 
-        # Wait for robot motion to complete before recording t_act
-        # This ensures latency = t_act - t_arm accurately reflects robot response time
+        if any([dx, dy, dz, drx]):
+            ok = robot.move_relative(dx=dx, dy=dy, dz=dz,
+                                    drx=drx, asynchronous=True)
+            if not ok:
+                logger.warning("[POLICY] Postural intervention blocked")
+
         time.sleep(0.05)
         t_act = time.time()
 
         self._intervention_count += 1
-        self._last_intervention_at = now
-        self._last_pss_at_intervention = pss
-        self._above_threshold_since = None
-        self._in_corrected_state = True
+        self._last_intervention_at        = now
+        self._last_pss_at_intervention    = pss
+        self._above_threshold_since       = None
+        self._in_corrected_state          = True
 
         result.update({
-            "triggered": True,
-            "reason": "intervention",
-            "interventions": interventions,
-            "intervention_id": self._intervention_count,
-            "t_arm": t_arm,
-            "t_act": t_act,
-            "latency_s": t_act - t_arm,
+            "triggered":        True,
+            "reason":           "intervention",
+            "interventions":    interventions,
+            "intervention_id":  self._intervention_count,
+            "t_arm":            t_arm,
+            "t_act":            t_act,
+            "latency_s":        t_act - t_arm,
         })
-        logger.info(f"[POLICY] Intervention #{self._intervention_count}: "
-                    f"PSS={pss:.3f}, latency={t_act-t_arm:.2f}s, "
-                    f"actions={interventions}")
+        logger.info(f"[POLICY] PSS intervention #{self._intervention_count}: "
+                    f"PSS={pss:.3f} dz={dz:+.3f} drx={drx:+.3f} "
+                    f"dx={dx:+.3f} dy={dy:+.3f}")
         return result
 
-    def _compute_interventions(self, pss_components):
-        actions = []
-        trunk       = pss_components.get("trunk_score",    0.0)
+
+    def _compute_postural_interventions(self, pss_components):
+        actions  = []
         cervical    = pss_components.get("cervical_score", 0.0)
         cervical_cm = pss_components.get("cervical_cm",    0.0)
-        lean        = pss_components.get("lean_score",     0.0)
+        gaze        = pss_components.get("gaze_score",     0.0)
+        gaze_mag    = abs(gaze)
 
-        # Forward/down strain: raise and tilt the artifact.
-        posture_drive = max(lean, trunk)
-        if posture_drive > 0.25:
-            actions.append(("raise", config.Z_ADJUST_STEP * posture_drive))
-            actions.append(("tilt", config.TILT_ADJUST_STEP * posture_drive))
+        # Leaning to reach artifact → raise it so user doesn't have to reach as far
+        # Use gaze magnitude as proxy for reaching effort
+        if gaze_mag > 0.4:
+            actions.append(("raise",   config.Z_ADJUST_STEP * gaze_mag))
 
-        # Cervical displacement: add directional tilt.
-        if cervical > 0.3:
+        # Cervical directional tilt — only when clearly displaced
+        if cervical > 0.25:
             magnitude = config.TILT_ADJUST_STEP * cervical
             if cervical_cm < 0:
                 magnitude = -magnitude
             actions.append(("tilt", magnitude))
 
+        # Lateral move — bring artifact toward the side user is leaning
+        if gaze_mag > 0.4:
+            actions.append(("lateral", config.X_ADJUST_STEP * gaze))
+
         if not actions:
-            actions.append(("raise", config.Z_ADJUST_STEP * 0.5))
-            actions.append(("tilt", config.TILT_ADJUST_STEP * 0.5))
+            actions.append(("raise", config.Z_ADJUST_STEP * 0.4))
 
         return actions

@@ -115,30 +115,22 @@ class PSSCalculator:
 
     def cervical_displacement_score(self, landmarks):
         """
-        Forward head displacement = horizontal distance between ear-midpoint
-        and shoulder-midpoint, scaled by user's shoulder width (assumed 38 cm).
-
-        SIGNED version: positive = head forward to right, negative = head forward to left
-        Map: 0 cm -> 0, ±5 cm -> ±1.0 (proposal IV.B).
-        Returns (displacement_cm_signed, score_in_[0,1]).
-
-        Camera position compensation: If camera is on left/right, adjust sensitivity
-        for tilt in blind direction (e.g., left tilt harder to detect from left-front camera).
+        From overhead-left camera, cervical displacement is unreliable
+        because the ear-shoulder horizontal offset is dominated by camera angle.
+        Use ONLY for directional info (left/right), not magnitude for PSS.
+        Returns (displacement_cm, score) where score is heavily dampened.
         """
         if landmarks is None:
             return 0.0, 0.0
 
-        # Extract landmarks with visibility check (0-1 where 1 is confident)
         le = landmarks["LEFT_EAR"]
         re = landmarks["RIGHT_EAR"]
         ls = landmarks["LEFT_SHOULDER"]
         rs = landmarks["RIGHT_SHOULDER"]
 
-        # Only use if visibility > 0.7 (confident detection)
-        # Visibility is at index 2 for each landmark (x, y, z, visibility)
         MIN_VISIBILITY = 0.7
         if (le[3] < MIN_VISIBILITY or re[3] < MIN_VISIBILITY or
-            ls[3] < MIN_VISIBILITY or rs[3] < MIN_VISIBILITY):
+                ls[3] < MIN_VISIBILITY or rs[3] < MIN_VISIBILITY):
             return 0.0, 0.0
 
         le = le[:2]
@@ -146,36 +138,32 @@ class PSSCalculator:
         ls = ls[:2]
         rs = rs[:2]
 
-        ear_mid = midpoint(le, re)
+        ear_mid      = midpoint(le, re)
         shoulder_mid = midpoint(ls, rs)
-
         shoulder_width = abs(ls[0] - rs[0])
         if shoulder_width < 1e-6:
             return 0.0, 0.0
 
-        # Preserve direction: positive if head forward-right, negative if forward-left
         x_offset_signed = ear_mid[0] - shoulder_mid[0]
         ASSUMED_SHOULDER_WIDTH_CM = 38.0
-        displacement_cm = ((x_offset_signed / shoulder_width)
-                           * ASSUMED_SHOULDER_WIDTH_CM)
+        displacement_cm = (x_offset_signed / shoulder_width) * ASSUMED_SHOULDER_WIDTH_CM
 
-        # Subtract individual neutral baseline if calibrated
         if self._neutral_cervical_offset is not None:
             displacement_cm = displacement_cm - self._neutral_cervical_offset
 
-        # Apply camera position compensation to improve detection in blind direction
-        camera_pos = config.CAMERA_POSITION
-        if camera_pos in config.CERVICAL_SENSITIVITY_COMPENSATE:
-            if displacement_cm > 0:
-                # Head tilted right
-                multiplier = config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["positive"]
-            else:
-                # Head tilted left
-                multiplier = config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["negative"]
-            displacement_cm *= multiplier
+        # Dampen heavily — from this camera angle cervical is noisy
+        # Only contribute to PSS if displacement is very large (> 2x neutral range)
+        DAMPENING = 0.3
+        score = (abs(displacement_cm) / config.CERVICAL_MAX_CM) * DAMPENING
 
-        # Score uses absolute value (magnitude), but displacement keeps sign
-        score = abs(displacement_cm) / config.CERVICAL_MAX_CM
+        # Camera compensation for sign only
+        camera_pos = getattr(config, 'CAMERA_POSITION', 'center')
+        if camera_pos in config.CERVICAL_SENSITIVITY_COMPENSATE:
+            mult = (config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["positive"]
+                    if displacement_cm > 0
+                    else config.CERVICAL_SENSITIVITY_COMPENSATE[camera_pos]["negative"])
+            displacement_cm *= mult
+
         return displacement_cm, float(np.clip(score, 0.0, 1.0))
 
     # ---------- COMPOSITE PSS ----------
@@ -230,16 +218,74 @@ class PSSCalculator:
         score = lean_delta / 0.1
         return lean_delta, float(np.clip(score, 0.0, 1.0))
 
+    def gaze_direction_score(self, landmarks):
+        """
+        Detects HEAD ROTATION only — not body lean.
+        Uses ear asymmetry: when head turns right, right ear becomes
+        less visible and left ear moves further right in frame.
+        From any camera angle, ear asymmetry is a reliable head-turn signal.
+        """
+        if landmarks is None:
+            return 0.0, 0.0
+
+        le = landmarks["LEFT_EAR"]
+        re = landmarks["RIGHT_EAR"]
+        ls = landmarks["LEFT_SHOULDER"][:2]
+        rs = landmarks["RIGHT_SHOULDER"][:2]
+
+        shoulder_width = abs(ls[0] - rs[0])
+        if shoulder_width < 1e-6:
+            return 0.0, 0.0
+
+        le_vis = le[3]
+        re_vis = re[3]
+        le_x   = le[0]
+        re_x   = re[0]
+
+        # Method: visibility asymmetry
+        # Head turns right → right ear visibility drops, left ear stays visible
+        # Head turns left  → left ear visibility drops, right ear stays visible
+        vis_diff = le_vis - re_vis   # positive = left more visible = head turned right
+        # Scale to [-1, 1]: 0.3 difference = significant turn
+        vis_score = np.clip(vis_diff / 0.3, -1.0, 1.0)
+
+        # Method 2: ear X position relative to shoulder midpoint
+        shoulder_mid_x = (ls[0] + rs[0]) / 2.0
+        ear_mid_x      = (le_x + re_x) / 2.0
+        pos_offset     = (ear_mid_x - shoulder_mid_x) / shoulder_width
+        pos_score      = np.clip(pos_offset / 0.2, -1.0, 1.0)
+
+        # Combine: visibility asymmetry is more reliable for head turn
+        combined = vis_score * 0.6 + pos_score * 0.4
+
+        # Camera compensation for left-positioned camera
+        if hasattr(config, 'CAMERA_POSITION'):
+            cam = config.CAMERA_POSITION
+            if cam == "left" and combined > 0:
+                combined *= 1.5
+            elif cam == "right" and combined < 0:
+                combined *= 1.5
+
+        score = float(np.clip(combined, -1.0, 1.0))
+        return combined, score
+    
     def compute(self, landmarks):
         trunk_angle,  trunk_score    = self.trunk_inclination_score(landmarks)
         cervical_cm,  cervical_score = self.cervical_displacement_score(landmarks)
         lean_delta,   lean_score     = self.forward_lean_score(landmarks)
+        gaze_offset,  gaze_score     = self.gaze_direction_score(landmarks)
 
-    # PSS = weighted mean of all three
-    # Forward lean gets highest weight since that's what we want the cobot to respond to
-        pss_raw = (trunk_score * 0.30 +
-                   cervical_score * 0.30 +
-                   lean_score * 0.40)
+        # From overhead-left camera:
+        # - trunk_score and lean_score are unreliable (always 0)
+        # - cervical_score is noisy (now dampened)
+        # - gaze magnitude IS the primary postural effort signal
+        # PSS driven mainly by gaze magnitude + dampened cervical
+        gaze_magnitude = abs(gaze_score)   # 0 = centered, 1 = extreme lateral
+
+        pss_raw = (gaze_magnitude  * 0.55 +
+                cervical_score  * 0.30 +
+                lean_score      * 0.10 +
+                trunk_score     * 0.05)
 
         self.buffer.append(pss_raw)
         pss_smooth = float(np.mean(self.buffer))
@@ -251,6 +297,8 @@ class PSSCalculator:
             "cervical_score": cervical_score,
             "lean_delta":     lean_delta,
             "lean_score":     lean_score,
+            "gaze_offset":    gaze_offset,
+            "gaze_score":     gaze_score,
             "pss_raw":        pss_raw,
             "pss_smooth":     pss_smooth,
         }

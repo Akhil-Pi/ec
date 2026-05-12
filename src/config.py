@@ -33,6 +33,7 @@ Z_ADJUST_STEP    = 0.02   # 2cm vertical
 X_ADJUST_STEP    = 0.02   # 2cm lateral
 Y_ADJUST_STEP    = 0.02   # 2cm depth
 TILT_ADJUST_STEP = 0.05   # ~3 degrees
+ROTATION_ADJUST_STEP = 0.06   # ~2 degrees rotation around Z axis (yaw)
 
 PARTICIPANT_POSTURE = "standing"
 
@@ -64,8 +65,8 @@ TARGET_FPS   = 30
 CAMERA_POSITION = "left"  # 摄像头在参与者左前方
 CERVICAL_SENSITIVITY_COMPENSATE = {
     "left": {
-        "positive": 1.0,   # 向右倾时灵敏度
-        "negative": 1.4,   # 向左倾时灵敏度（需要补偿）
+        "positive": 1.0,   # head tilts RIGHT = away from camera, harder to detect
+        "negative": 1.4,   # head tilts LEFT = toward camera, easy to detect
     },
     "center": {
         "positive": 1.0,
