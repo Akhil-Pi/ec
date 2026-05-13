@@ -33,7 +33,7 @@ Z_ADJUST_STEP    = 0.02   # 2cm vertical
 X_ADJUST_STEP    = 0.02   # 2cm lateral
 Y_ADJUST_STEP    = 0.02   # 2cm depth
 TILT_ADJUST_STEP = 0.05   # ~3 degrees
-ROTATION_ADJUST_STEP = 0.06   # ~2 degrees rotation around Z axis (yaw)
+ROTATION_ADJUST_STEP = 0.08   # ~2 degrees rotation around Z axis (yaw)
 
 PARTICIPANT_POSTURE = "standing"
 
