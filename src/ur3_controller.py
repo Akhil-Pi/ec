@@ -127,12 +127,13 @@ class UR3Controller:
 
     def adjust_rotation(self, delta_j6):
         import math
-        MAX_ROTATION = math.radians(35)
+        MAX_ROTATION = math.radians(90)
 
         new_total = self._accumulated_rotation + delta_j6
         if abs(new_total) > MAX_ROTATION:
-            delta_j6 = MAX_ROTATION * (1 if delta_j6 > 0 else -1) \
-                    - self._accumulated_rotation
+            # Clamp to limit without reversing direction
+            clamped_total = MAX_ROTATION if new_total > 0 else -MAX_ROTATION
+            delta_j6 = clamped_total - self._accumulated_rotation
             if abs(delta_j6) < 0.001:
                 logger.info("[UR3] Rotation limit reached")
                 return True
