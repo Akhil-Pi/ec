@@ -1,0 +1,8 @@
+participant_id: P001
+condition: experimental
+start_time: 2026-05-13T12:37:02.825853
+duration_s: 220.9
+frames_logged: 1604
+events_logged: 68
+pss_threshold: 0.25
+pss_hysteresis: 0.08
