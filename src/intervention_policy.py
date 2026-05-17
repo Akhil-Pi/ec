@@ -1,25 +1,3 @@
-"""
-intervention_policy.py
-======================
-Decides WHEN and HOW the cobot intervenes to correct posture.
-
-Policy logic (intentionally simple and interpretable for the report):
-  - PSS < threshold        -> no action
-  - PSS >= threshold       -> arm a "monitoring" timer
-  - Sustained >= 2 seconds -> trigger correction
-  - After correction       -> 5-second cooldown
-  - Hysteresis             -> PSS must drop below (threshold - 0.10) to reset
-
-Correction strategy:
-  - High trunk inclination  -> raise artifact (Z+)
-  - High cervical disp.     -> tilt artifact toward conservator (rx+)
-  - Both                    -> combined intervention
-
-Latency tracking:
-  - Records the timestamp at threshold crossing (t_arm)
-  - Records the timestamp the robot completes its first move (t_act)
-  - Latency = t_act - t_arm  (used for proposal's Spearman analysis)
-"""
 import time
 import logging
 import config
@@ -71,11 +49,10 @@ class InterventionPolicy:
             result["reason"] = "control_group"
             return result
 
-        # ── ROTATION (independent of PSS, own cooldown) ──────────────────────
+        # ROTATION
         rotation_triggered = False
         if abs(gaze) > 0.5 and pss >= (self.threshold * 0.6):
             # Only rotate if there's at least some postural strain
-            # threshold * 0.6 = 0.15 — low bar but filters pure noise
             time_since_rotate = now - self._last_rotation_at
             if time_since_rotate >= self._rotation_cooldown:
                 magnitude = -config.ROTATION_ADJUST_STEP * gaze
@@ -85,7 +62,7 @@ class InterventionPolicy:
                 logger.info(f"[POLICY] Rotation: gaze={gaze:+.2f} "
                             f"PSS={pss:.3f} mag={magnitude:+.3f}")
 
-        # ── PSS-BASED POSTURAL CORRECTION (raise / tilt / forward / lateral) ─
+        # PSS-BASED POSTURAL CORRECTION (raise / tilt / forward / lateral)
         # Hysteresis recovery
         if (self._in_corrected_state
                 and pss < (self.threshold - self.hysteresis)):
@@ -134,7 +111,7 @@ class InterventionPolicy:
             result["triggered"] = rotation_triggered
             return result
 
-        # ── TRIGGER PSS INTERVENTION ─────────────────────────────────────────
+        # TRIGGER PSS INTERVENTION
         t_arm = self._above_threshold_since
         interventions = self._compute_postural_interventions(pss_components)
 
@@ -207,7 +184,6 @@ class InterventionPolicy:
             if cervical_cm > 0:  # head tilted right → rotate left (negative)
                 magnitude = -magnitude
             actions.append(("rotate", magnitude))
-
 
         if not actions:
             actions.append(("raise", config.Z_ADJUST_STEP * 0.4))

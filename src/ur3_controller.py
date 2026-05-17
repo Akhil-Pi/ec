@@ -20,7 +20,7 @@ class UR3Controller:
         self.simulate = simulate or not RTDE_AVAILABLE
         self.rtde_c  = None
         self.rtde_r  = None
-        self._accumulated_rotation = 0.0   # track total J6 rotation from start
+        self._accumulated_rotation = 0.0
 
         if not self.simulate:
             print(f"[UR3] Connecting to {self.ip} ...")
@@ -153,7 +153,6 @@ class UR3Controller:
                     f"(total: {math.degrees(new_total):.1f} deg / "
                     f"limit: ±{math.degrees(MAX_ROTATION):.0f} deg)")
 
-        # asynchronous=True — vision loop keeps running during rotation
         ok = self.rtde_c.moveJ(target_joints, 0.1, 0.1, True)
         if ok:
             self._accumulated_rotation = new_total
@@ -180,4 +179,4 @@ class UR3Controller:
         try:
             self.rtde_c.stopScript()
         except Exception:
-            pass
+            pass 

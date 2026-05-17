@@ -1,10 +1,3 @@
-"""
-pose_detector.py
-================
-MediaPipe Pose wrapper using the new Tasks API (mediapipe >= 0.10.x).
-Requires pose_landmarker.task model file in the same directory as this script.
-Download: https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task
-"""
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -14,7 +7,7 @@ from mediapipe.tasks.python.vision import RunningMode
 import os
 import config
 
-# Landmark names we care about (index in the 33-landmark model)
+# Landmark names
 LANDMARK_NAMES = {
     0:  "NOSE",
     7:  "LEFT_EAR",

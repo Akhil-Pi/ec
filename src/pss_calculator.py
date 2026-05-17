@@ -1,24 +1,9 @@
-"""
-pss_calculator.py
-=================
-Computes the Postural Strain Score (PSS) from MediaPipe landmarks.
-
-PSS is the equal-weighted mean of two biomechanically grounded sub-scores:
-  1. Trunk Inclination Score (RULA/REBA-anchored)
-  2. Cervical Displacement Score (Hansraj-anchored)
-
-References:
-  - RULA: McAtamney & Corlett, Appl. Ergon. 1993
-  - REBA: Hignett & McAtamney, Appl. Ergon. 2000
-  - Hansraj: Surg. Technol. Int. 2014
-"""
 import numpy as np
 from collections import deque
 import config
 
 
 def angle_between(v1, v2):
-    """Angle in degrees between two 2D vectors."""
     v1 = np.array(v1, dtype=float)
     v2 = np.array(v2, dtype=float)
     n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
@@ -33,7 +18,6 @@ def midpoint(p1, p2):
 
 
 class PSSCalculator:
-    """Computes and smooths PSS over time. Maintains a rolling buffer."""
 
     def __init__(self, smoothing_window=None):
         self.window = smoothing_window or config.PSS_SMOOTHING_WINDOW
@@ -41,23 +25,11 @@ class PSSCalculator:
         self._neutral_cervical_offset  = None
         self._neutral_lean_ratio       = None
         self._neutral_torso_height     = None
-        self._neutral_nose_drop        = None   # kept for compatibility
-        self._neutral_shoulder_y       = None   # NEW: shoulder height in frame
-        self._neutral_shoulder_width   = None   # NEW: shoulder width when upright
-    # ---------- SUB-SCORES ----------
+        self._neutral_nose_drop        = None
+        self._neutral_shoulder_y       = None
+        self._neutral_shoulder_width   = None
 
     def trunk_inclination_score(self, landmarks):
-        """
-        For downward-angled camera (30-45 deg above shoulder):
-        
-        When upright: shoulders appear in lower portion of frame,
-                    shoulder width appears normal.
-        When bending forward: shoulders rise in frame (move toward camera),
-                            shoulder width appears wider (foreshortening).
-        
-        Primary signal: shoulder Y position rising toward top of frame.
-        Secondary signal: shoulder width increasing (foreshortening effect).
-        """
         if landmarks is None:
             return 0.0, 0.0
 
@@ -114,12 +86,6 @@ class PSSCalculator:
         return angle_deg, float(np.clip(combined, 0.0, 1.0))
 
     def cervical_displacement_score(self, landmarks):
-        """
-        From overhead-left camera, cervical displacement is unreliable
-        because the ear-shoulder horizontal offset is dominated by camera angle.
-        Use ONLY for directional info (left/right), not magnitude for PSS.
-        Returns (displacement_cm, score) where score is heavily dampened.
-        """
         if landmarks is None:
             return 0.0, 0.0
 
@@ -169,15 +135,6 @@ class PSSCalculator:
     # ---------- COMPOSITE PSS ----------
 
     def forward_lean_score(self, landmarks):
-        """
-        Proxy for forward lean using front-facing camera.
-
-        For LOW-ANGLE cameras (仰视): Uses elbow/wrist extension instead of foreshortening.
-        When upright: arms hang down naturally
-        When leaning forward: arms come forward (Y-axis compression in image coords)
-
-        Returns (lean_delta, score_in_[0,1]).
-        """
         if landmarks is None:
             return 0.0, 0.0
 
@@ -219,12 +176,6 @@ class PSSCalculator:
         return lean_delta, float(np.clip(score, 0.0, 1.0))
 
     def gaze_direction_score(self, landmarks):
-        """
-        Detects HEAD ROTATION only — not body lean.
-        Uses ear asymmetry: when head turns right, right ear becomes
-        less visible and left ear moves further right in frame.
-        From any camera angle, ear asymmetry is a reliable head-turn signal.
-        """
         if landmarks is None:
             return 0.0, 0.0
 
@@ -306,10 +257,6 @@ class PSSCalculator:
     # ---------- CALIBRATION ----------
 
     def calibrate_neutral(self, samples):
-        """
-        Set the participant's neutral cervical offset from displacement_cm
-        samples collected while they sit upright.
-        """
         if not samples:
             self._neutral_cervical_offset = 0.0
             return

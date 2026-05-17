@@ -1,26 +1,3 @@
-"""
-main.py
-=======
-Run a single experimental session for the Empathetic Conservator study.
-
-Usage:
-    python main.py --participant P01 --condition control
-    python main.py --participant P01 --condition experimental
-    python main.py --participant P01 --condition control --simulate
-    python main.py --participant P01 --condition experimental --duration 30
-
-Workflow:
-  1. Calibration phase (30s):
-     Participant sits in their natural neutral posture.
-     We collect their baseline cervical displacement.
-  2. Task phase (45 min):
-     Participant performs facsimile fine brushwork (Task A or B
-     from team's setup design).
-     - Control: cobot is parked, artifact is on static platform
-                (no robot intervention; vision still records PSS)
-     - Experimental: cobot intervenes when PSS exceeds threshold
-  3. NASA-TLX questionnaire (administered separately via nasa_tlx_form.py)
-"""
 import argparse
 import time
 import logging
@@ -38,7 +15,7 @@ from session_logger import SessionLogger
 def calibration_phase(detector, pss_calc, cap, logger_obj,
                       duration_s=None):
     duration_s = duration_s or config.CALIBRATION_DURATION_S
-    print(f"\n=== CALIBRATION PHASE ({duration_s}s) ===")
+    print(f"\n CALIBRATION PHASE ({duration_s}s)")
     print("Tell participant: 'Please sit upright in your natural neutral "
           "posture, looking straight ahead.'")
     print("Press SPACE to start...")
@@ -58,8 +35,8 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
     lean_samples           = []
     torso_samples          = []
     nose_samples           = []
-    shoulder_y_samples     = []   # NEW
-    shoulder_width_samples = []   # NEW
+    shoulder_y_samples     = []
+    shoulder_width_samples = []
 
     start = time.time()
     while (time.time() - start) < duration_s:
@@ -83,8 +60,8 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
 
             torso_samples.append(hip_mid[1] - sh_mid[1])
             nose_samples.append(sh_mid[1] - nose[1])
-            shoulder_y_samples.append(sh_mid[1])              # NEW
-            shoulder_width_samples.append(abs(ls[0] - rs[0])) # NEW
+            shoulder_y_samples.append(sh_mid[1])
+            shoulder_width_samples.append(abs(ls[0] - rs[0]))
 
             # Lean (arm spread)
             le = landmarks.get("LEFT_ELBOW")
@@ -112,7 +89,7 @@ def calibration_phase(detector, pss_calc, cap, logger_obj,
         shoulder_y_samples,
         shoulder_width_samples
     )
-    print("=== CALIBRATION COMPLETE ===\n")
+    print("CALIBRATION COMPLETE \n")
 
 
 # HUD OVERLAY
