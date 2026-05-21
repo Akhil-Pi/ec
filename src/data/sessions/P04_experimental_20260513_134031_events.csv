@@ -1,0 +1,9 @@
+timestamp_s,event_type,pss_at_event,actions,latency_s,details
+1.338,at_desired_pose,0.0000,,,
+38.526,intervention,0.1501,,,id=None
+40.059,intervention,0.2583,,,id=None
+43.897,intervention,0.1502,,,id=None
+45.405,intervention,0.2106,,,id=None
+46.918,intervention,0.2016,,,id=None
+48.441,intervention,0.1964,,,id=None
+49.956,intervention,0.1666,,,id=None

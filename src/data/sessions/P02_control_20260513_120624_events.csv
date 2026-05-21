@@ -1,0 +1,4 @@
+timestamp_s,event_type,pss_at_event,actions,latency_s,details
+1.517,at_desired_pose,0.0000,,,
+172.870,manual_marker,0.3149,,,
+358.619,user_abort,0.3757,,,

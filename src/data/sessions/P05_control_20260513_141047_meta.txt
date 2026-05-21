@@ -1,0 +1,8 @@
+participant_id: P05
+condition: control
+start_time: 2026-05-13T14:10:47.652804
+duration_s: 167.6
+frames_logged: 1301
+events_logged: 2
+pss_threshold: 0.25
+pss_hysteresis: 0.08

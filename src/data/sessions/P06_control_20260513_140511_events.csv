@@ -1,0 +1,3 @@
+timestamp_s,event_type,pss_at_event,actions,latency_s,details
+17.065,at_desired_pose,0.0000,,,
+233.956,user_abort,0.4911,,,

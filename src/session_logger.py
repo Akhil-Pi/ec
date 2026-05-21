@@ -40,7 +40,8 @@ class SessionLogger:
 
         self._frames_writer.writerow([
             "timestamp_s", "trunk_angle_deg", "trunk_score",
-            "cervical_cm", "cervical_score", "pss_raw", "pss_smooth"
+            "cervical_cm", "cervical_score", "lean_score",
+            "pss_raw", "pss_smooth"
         ])
         self._events_writer.writerow([
             "timestamp_s", "event_type", "pss_at_event",
@@ -65,6 +66,7 @@ class SessionLogger:
             f"{pss_components['trunk_score']:.4f}",
             f"{pss_components['cervical_cm']:.2f}",
             f"{pss_components['cervical_score']:.4f}",
+            f"{pss_components.get('lean_score', 0.0):.4f}",
             f"{pss_components['pss_raw']:.4f}",
             f"{pss_components['pss_smooth']:.4f}",
         ])

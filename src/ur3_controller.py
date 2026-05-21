@@ -8,7 +8,7 @@ try:
     RTDE_AVAILABLE = True
 except ImportError:
     RTDE_AVAILABLE = False
-    print("ur_rtde not installed - running in SIMULATION mode")
+    print("ur_rtde not installed - SIMULATION mode")
 
 logger = logging.getLogger(__name__)
 
@@ -16,35 +16,29 @@ logger = logging.getLogger(__name__)
 class UR3Controller:
 
     def __init__(self, ip=None, simulate=False):
-        self.ip = ip or config.UR3_IP
+        self.ip      = ip or config.UR3_IP
         self.simulate = simulate or not RTDE_AVAILABLE
-        self.rtde_c = None
-        self.rtde_r = None
-        self._sim_joints = list(config.HOME_JOINTS)
+        self.rtde_c  = None
+        self.rtde_r  = None
+        self._accumulated_rotation = 0.0
 
         if not self.simulate:
             print(f"[UR3] Connecting to {self.ip} ...")
             self.rtde_c = RTDEControlInterface(self.ip)
             self.rtde_r = RTDEReceiveInterface(self.ip)
-            print(f"[UR3] Connected. TCP pose: {self.get_pose()}")
+            print(f"[UR3] Connected. TCP: {self.get_pose()}")
         else:
             print("[UR3] SIMULATION mode")
 
-    # ---------- STATE ----------
-
     def get_pose(self):
-        """TCP pose [x,y,z,rx,ry,rz] in meters/radians."""
         if self.simulate:
             return [0.0] * 6
         return self.rtde_r.getActualTCPPose()
 
     def get_joint_positions(self):
-        """Joint positions in radians."""
         if self.simulate:
-            return list(self._sim_joints)
+            return [0.0] * 6
         return self.rtde_r.getActualQ()
-
-    # ---------- SAFETY (for fine adjustments only) ----------
 
     @staticmethod
     def is_within_safe_bounds(pose):
@@ -54,202 +48,130 @@ class UR3Controller:
                 and b["y"][0] <= y <= b["y"][1]
                 and b["z"][0] <= z <= b["z"][1])
 
-    # ---------- MOTION ----------
-
     def move_joints(self, joint_positions, speed=None, acceleration=None):
-        """Move via joint space — exact path, matches pendant."""
+        """Joint-space move — exact path."""
         speed        = speed        or 0.05
         acceleration = acceleration or 0.05
         if self.simulate:
-            self._sim_joints = list(joint_positions)
             time.sleep(0.05)
             return True
         logger.info(f"[UR3] moveJ: {[round(v,3) for v in joint_positions]}")
         return self.rtde_c.moveJ(joint_positions, speed, acceleration)
 
-    def move_linear(self, target_pose, speed=None, acceleration=None):
-        """
-        Straight-line TCP move — used ONLY for small fine adjustments
-        (±2cm nudges after transition is complete).
-        NOT used for waypoint traversal.
-        """
+    def move_to_desired(self):
+        print("[UR3] Moving to DESIRED position...")
+        ok = self.move_joints(config.DESIRED_JOINTS, speed=0.05,
+                            acceleration=0.05)
+        if ok:
+            self._accumulated_rotation = 0.0   # reset tracker
+            print("[UR3] At DESIRED position.")
+        return ok
+
+    def move_linear(self, target_pose, speed=None, acceleration=None,
+                    asynchronous=False):
+        """Straight-line TCP move — for fine adjustments only."""
         speed        = speed        or config.MOVE_SPEED
         acceleration = acceleration or config.MOVE_ACCELERATION
-
         if not self.is_within_safe_bounds(target_pose):
             logger.warning(f"[UR3] BLOCKED: {target_pose[:3]} outside bounds")
             return False
         if self.simulate:
             time.sleep(0.05)
             return True
-        return self.rtde_c.moveL(target_pose, speed, acceleration)
+            #return self.rtde_c.mo
+        return self.rtde_c.moveL(target_pose, speed, acceleration, asynchronous)
+
+    def wait_for_motion_complete(self, timeout_s=5.0):
+        """
+        Wait until the robot stops moving.
+        Used after async moveL to record accurate latency.
+        """
+        if self.simulate:
+            return
+        import time
+        start = time.time()
+        while time.time() - start < timeout_s:
+            if not self.rtde_r.isRobotMoving():
+                return
+            time.sleep(0.02)
+        logger.warning("[UR3] wait_for_motion_complete timed out")
 
     def move_relative(self, dx=0.0, dy=0.0, dz=0.0,
-                      drx=0.0, dry=0.0, drz=0.0):
+                    drx=0.0, dry=0.0, drz=0.0,
+                    asynchronous=False):
         """Relative TCP move — for fine adjustments only."""
         cur = self.get_pose()
         tgt = [cur[0]+dx, cur[1]+dy, cur[2]+dz,
-               cur[3]+drx, cur[4]+dry, cur[5]+drz]
-        return self.move_linear(tgt)
-
-    def go_home(self):
-        """Go to home using joint space — safe and predictable."""
-        return self.move_joints(config.HOME_JOINTS)
-
-    def stop(self, deceleration=2.0):
-        if self.simulate:
-            return
-        self.rtde_c.stopL(deceleration)
-
-    # ---------- POSTURAL FINE ADJUSTMENTS ----------
+            cur[3]+drx, cur[4]+dry, cur[5]+drz]
+        return self.move_linear(tgt, asynchronous=asynchronous)
 
     def adjust_lateral(self, dx):
         dx = max(min(dx, config.X_ADJUST_STEP), -config.X_ADJUST_STEP)
         logger.info(f"[UR3] Lateral: {dx:+.3f} m")
-        return self.move_relative(dx=dx)
+        return self.move_relative(dx=dx, asynchronous=True)
 
     def adjust_depth(self, dy):
         dy = max(min(dy, config.Y_ADJUST_STEP), -config.Y_ADJUST_STEP)
         logger.info(f"[UR3] Depth: {dy:+.3f} m")
-        return self.move_relative(dy=dy)
+        return self.move_relative(dy=dy, asynchronous=True)
 
     def adjust_height(self, dz):
         dz = max(min(dz, config.Z_ADJUST_STEP), -config.Z_ADJUST_STEP)
         logger.info(f"[UR3] Height: {dz:+.3f} m")
-        return self.move_relative(dz=dz)
+        return self.move_relative(dz=dz, asynchronous=True)
 
     def adjust_tilt(self, drx):
         drx = max(min(drx, config.TILT_ADJUST_STEP), -config.TILT_ADJUST_STEP)
         logger.info(f"[UR3] Tilt: {drx:+.3f} rad")
-        return self.move_relative(drx=drx)
+        return self.move_relative(drx=drx, asynchronous=True)
 
-    # ---------- WAYPOINT TRAVERSAL ----------
+    def adjust_rotation(self, delta_j6):
+        import math
+        MAX_ROTATION = math.radians(90)
 
-    def move_through_joint_waypoints(self, joint_path, speed=None,
-                                      acceleration=None, confirm_each=False):
-        speed        = speed        or 0.05
-        acceleration = acceleration or 0.05
+        new_total = self._accumulated_rotation + delta_j6
+        if abs(new_total) > MAX_ROTATION:
+            # Clamp to limit without reversing direction
+            clamped_total = MAX_ROTATION if new_total > 0 else -MAX_ROTATION
+            delta_j6 = clamped_total - self._accumulated_rotation
+            if abs(delta_j6) < 0.001:
+                logger.info("[UR3] Rotation limit reached")
+                return True
 
-        print(f"\n[UR3] Joint traversal: {len(joint_path)} waypoints "
-              f"at {speed} rad/s")
+        delta_j6 = max(min(delta_j6,  config.ROTATION_ADJUST_STEP),
+                                -config.ROTATION_ADJUST_STEP)
 
-        for i, joints in enumerate(joint_path):
-            print(f"  Step {i+1}/{len(joint_path)}: "
-                  f"{[round(v,3) for v in joints]}")
-
-            if confirm_each:
-                ans = input(f"  Move to step {i+1}? "
-                            f"(Enter=yes, q=abort): ").strip().lower()
-                if ans == "q":
-                    print("  Aborted.")
-                    return False
-
-            try:
-                ok = self.move_joints(joints, speed=speed,
-                                      acceleration=acceleration)
-            except Exception as e:
-                print(f"\n  ERROR: {e}")
-                print("  Unlock on pendant, press Play, then press Enter.")
-                input("  Press Enter when ready: ")
-                try:
-                    ok = self.move_joints(joints, speed=speed,
-                                          acceleration=acceleration)
-                except Exception as e2:
-                    logger.error(f"[UR3] Retry failed: {e2}")
-                    return False
-
-            if not ok:
-                logger.warning(f"[UR3] Step {i+1} failed")
-                return False
-
-            time.sleep(0.3)
-            print(f"  Step {i+1} done.")
-
-        print("\n[UR3] Traversal complete.")
-        return True
-
-    def gradual_transition(self, joint_path=None, pss_callback=None):
-        """Gradually move to DESIRED via joint waypoints."""
-        joint_path = joint_path or config.JOINT_PATH
-        path       = joint_path[1:]   # skip HOME
-
-        print(f"\n[UR3] Gradual transition: {len(path)} steps")
-
-        for i, joints in enumerate(path):
-            logger.info(f"[UR3] Transition {i+1}/{len(path)}")
-            try:
-                ok = self.move_joints(joints, speed=0.05, acceleration=0.05)
-            except Exception as e:
-                logger.error(f"[UR3] Transition error: {e}")
-                return False
-            if not ok:
-                return False
-
-            if pss_callback is not None:
-                pss   = pss_callback()
-                delay = 8.0 if (pss and pss.get("pss_smooth", 1.0) < 0.25) else 4.0
-            else:
-                delay = 4.0
-
-            print(f"  Step {i+1}/{len(path)} done. Waiting {delay:.0f}s...")
-            time.sleep(delay)
-
-        print("[UR3] Transition complete.")
-        return True
-
-    # ---------- HOME CHECK ----------
-
-    def is_at_home(self, tolerance_rad=0.05):
-        """
-        Compare JOINT positions (radians) to HOME_JOINTS.
-        tolerance_rad=0.05 is about 3 degrees per joint.
-        """
-        current = self.get_joint_positions()
-        home    = config.HOME_JOINTS
-        dist    = sum((current[i] - home[i])**2 for i in range(6)) ** 0.5
-        ok      = dist < tolerance_rad
-        if not ok:
-            logger.warning(
-                f"[UR3] Not at home. Joint dist: {dist:.3f} rad\n"
-                f"  Current: {[round(v,3) for v in current]}\n"
-                f"  Home:    {[round(v,3) for v in home]}"
-            )
-        return ok, dist
-
-    def ensure_at_home(self, auto_move=False):
-        ok, dist = self.is_at_home()
-        if ok:
-            print(f"[UR3] Home verified (joint dist: {dist:.3f} rad)")
+        if self.simulate:
+            self._accumulated_rotation += delta_j6
             return True
 
-        print(f"\n[UR3] WARNING: {dist:.3f} rad from HOME_JOINTS")
-        print(f"  Current: {[round(v,3) for v in self.get_joint_positions()]}")
-        print(f"  Home:    {[round(v,3) for v in config.HOME_JOINTS]}")
+        current_joints = self.get_joint_positions()
+        target_joints  = list(current_joints)
+        target_joints[5] += delta_j6
 
-        if auto_move:
-            print("Will reverse through JOINT_PATH to get home.")
-            print("Confirm each step individually. Hand on E-stop.\n")
-            ans = input("Proceed? (y/N): ").strip().lower()
-            if ans != "y":
-                print("Aborted.")
-                return False
+        logger.info(f"[UR3] Rotate J6: {delta_j6:+.3f} rad "
+                    f"(total: {math.degrees(new_total):.1f} deg / "
+                    f"limit: ±{math.degrees(MAX_ROTATION):.0f} deg)")
 
-            reverse = list(reversed(config.JOINT_PATH))
-            ok = self.move_through_joint_waypoints(
-                reverse, speed=0.05, acceleration=0.05, confirm_each=True)
+        ok = self.rtde_c.moveJ(target_joints, 0.1, 0.1, True)
+        if ok:
+            self._accumulated_rotation = new_total
+        return ok
 
-            if ok:
-                ok2, dist2 = self.is_at_home()
-                print(f"Final check: {'OK' if ok2 else 'NOT AT HOME'} "
-                      f"(dist: {dist2:.3f} rad)")
-                return ok2
-            return False
-        else:
-            input("Manually jog to HOME on pendant, then press Enter...")
-            ok, dist = self.is_at_home()
-            return ok
-
-    # ---------- CLEANUP ----------
+    def reset_rotation(self):
+        """Return artifact to original rotation. Call between participants."""
+        import math
+        if abs(self._accumulated_rotation) < 0.001:
+            return True
+        current_joints = self.get_joint_positions()
+        target_joints  = list(current_joints)
+        target_joints[5] -= self._accumulated_rotation
+        logger.info(f"[UR3] Resetting rotation "
+                    f"({math.degrees(self._accumulated_rotation):.1f} deg -> 0)")
+        ok = self.rtde_c.moveJ(target_joints, 0.1, 0.1, False)
+        if ok:
+            self._accumulated_rotation = 0.0
+        return ok
 
     def disconnect(self):
         if self.simulate:
@@ -257,4 +179,4 @@ class UR3Controller:
         try:
             self.rtde_c.stopScript()
         except Exception:
-            pass
+            pass 
