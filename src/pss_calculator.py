@@ -107,8 +107,6 @@ class PSSCalculator:
         ear_mid      = midpoint(le, re)
         shoulder_mid = midpoint(ls, rs)
         shoulder_width = abs(ls[0] - rs[0])
-        if shoulder_width < 1e-6:
-            return 0.0, 0.0
 
         x_offset_signed = ear_mid[0] - shoulder_mid[0]
         ASSUMED_SHOULDER_WIDTH_CM = 38.0
